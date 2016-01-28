@@ -38,6 +38,7 @@ FunctionsToExport = @(
     'Get-SCCMSoftwareFile',
     'Get-SCCMBrowserHelperObject',
     'Get-SCCMShare',
+    'Get-SCCMPrimaryUser',
     'Find-SCCMRenamedCMD',
     'Find-SCCMUnusualEXE',
     'Find-SCCMRareApplication',

@@ -2501,6 +2501,122 @@ WHERE
 }
 
 
+function Get-SCCMPrimaryUser {
+<#
+    .SYNOPSIS
+
+        Returns information on primary users set for specific machine names.
+        This option is not enabled by default.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER Newest
+
+        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Detaults to the max value of a 32-bit integer (2147483647).
+
+    .PARAMETER OrderBy
+
+        Order the results by a particular field.
+
+    .PARAMETER Descending
+
+        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
+        the given field in descending order.
+
+    .PARAMETER ComputerNameFilter
+
+        Query only for results where the ComputerName field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER Unique_User_NameFilter
+
+        Query only for results where the Unique_User_Name field matches the given filter.
+        Wildcards accepted.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMPrimaryUser
+
+        Runs the query against all current SCCM sessions.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMPrimaryUser -ComputerFilterName WINDOWS1
+
+        Returns primary user information for just the WINDOWS1 machine.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMPrimaryUser | Get-SCCMPrimaryUser -Unique_User_NameFilter "DOMAIN\will"
+
+        Returns the locations where DOMAIN\Will is a primary user
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
+        [String]
+        [ValidateSet("Timestamp", "Caption", "Description", "Name", "Path")]
+        $OrderBy,
+
+        [Parameter(ParameterSetName = 'OrderBy')]
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ComputerNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $TimeStampFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Unique_User_NameFilter
+    )
+
+    begin {
+
+        $Query = @"
+SELECT TOP $Newest
+     COMPUTER.ResourceID as ResourceID,
+     COMPUTER.Name0 as ComputerName,
+     ADAPTER.IPAddress0 as IPAddress,
+     QUERY2.UserResourceID as UserResourceID,
+     QUERY.Unique_User_Name0 as Unique_User_Name
+FROM
+     v_R_System COMPUTER
+JOIN
+     vMDMUsersPrimaryMachines QUERY2 ON COMPUTER.ResourceID = QUERY2.MachineID
+JOIN
+     v_R_User QUERY ON QUERY2.UserResourceID = QUERY.ResourceID
+JOIN
+     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+WHERE
+     ADAPTER.IPAddress0 is not null
+"@
+
+        # add in our filter logic
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}
+
+
 ##############################################
 #
 # Common meta-queries to search for 'bad' things

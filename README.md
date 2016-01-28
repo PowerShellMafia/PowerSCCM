@@ -86,6 +86,9 @@ Returns information on discovered browser helper objects. **This option is not e
 ### Get-SCCMShare
 Returns information on discovered shares.**This option is not enabled by default in SCCM**.
 
+### Get-SCCMPrimaryUser
+Returns user/machine pairings where the user is set as a 'Primary User' through SCCM.
+
 
 ## Find-SCCM*
 
