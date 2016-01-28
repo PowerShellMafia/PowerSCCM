@@ -1,0 +1,1 @@
+Get-ChildItem (Join-Path $PSScriptRoot PowerSCCM.ps1) | % { . $_.FullName}
