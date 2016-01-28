@@ -10,7 +10,7 @@ ModuleVersion = '1.0'
 GUID = '0ac82760-3e0d-4124-bd1c-92c8dab97171'
 
 # Author of this module
-Author = '@harmj0y', '@jaredcatkinson', '@enigma0x3'
+Author = '@harmj0y', '@jaredcatkinson', '@enigma0x3', '@mattifestation'
 
 # Copyright statement for this module
 Copyright = 'BSD 3-Clause'

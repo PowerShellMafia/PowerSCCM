@@ -6,7 +6,7 @@ The code is kept PowerShell Version 2.0 compliant with no external dependencies.
 
 License: BSD 3-clause
 
-Authors: [@harmj0y](https://twitter.com/harmj0y), [@jaredcatkinson](https://twitter.com/jaredcatkinson), [@enigma0x3](https://twitter.com/enigma0x3)
+Authors: [@harmj0y](https://twitter.com/harmj0y), [@jaredcatkinson](https://twitter.com/jaredcatkinson), [@enigma0x3](https://twitter.com/enigma0x3), [@mattifestation](https://twitter.com/mattifestation)
 
 Heavily based on [work by Brandon Helms](https://github.com/Cr0n1c/SCCM-Enumeration) that's described more [in this post](https://cr0n1c.wordpress.com/2016/01/27/using-sccm-to-violate-best-practices/).
 
