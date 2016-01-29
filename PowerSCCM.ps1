@@ -473,10 +473,6 @@ function Get-FilterQuery {
     .PARAMETER Parameters
 
         The passed $PSBoundParameter set.
-
-    .PARAMETER NoAppend
-
-        Switch. Don't append a 0 to the end of the query field.
 #>
     [CmdletBinding()]
     param(
@@ -487,89 +483,83 @@ function Get-FilterQuery {
 
         [Parameter(Position = 1, Mandatory=$True)]
         [ValidateNotNullOrEmpty()]
-        $Parameters,
-
-        [Switch]
-        $NoAppend
+        $Parameters
     )
 
-    $Parameters.GetEnumerator() | Where-Object {$_.Key -like '*Filter'} | ForEach-Object {
+    if($Parameters['Filter']) {
+        # if a single hard -Filter <X> is set, ignore other filter parameters
+        $Filter = $Filter.Replace('*', '%')
 
-        # get the SQL wildcards correct
-        $Value = $_.Value.Replace('*', '%')
-
-        # if we have multiple
-        if($Value.contains(" or ")){
-            $Values = $Value -split " or " | ForEach-Object {$_.trim()}
+        if($Query.EndsWith("AS DATA")) {
+            $Query += "`nWHERE ($Filter)"
         }
         else {
-            $Values = @($Value)
+            $Query += "`nAND ($Filter)"
         }
+    }
+    else {
 
-        $Query += "`nAND ("
-        $Clauses = @()
+        $Parameters.GetEnumerator() | Where-Object {($_.Key -like '*Filter') -and ($_.Key -ne 'Filter')} | ForEach-Object {
 
-        ForEach ($Value in $Values) {
+            # get the SQL wildcards correct
+            $Value = $_.Value.Replace('*', '%')
 
-            if($Value.StartsWith('!')) {
-                $Operator = "NOT LIKE"
-                $Value = $Value.Substring(1)
-            }
-            elseif($Value.StartsWith("<") -or $Value.StartsWith(">")) {
-                $Operator = $Value[0]
-                $Value = $Value.Substring(1)
+            # if we have multiple values to build clauses for
+            if($Value.contains(" or ")){
+                $Values = $Value -split " or " | ForEach-Object {$_.trim()}
             }
             else {
-                $Operator = "LIKE"
+                $Values = @($Value)
             }
 
-            if($_.Key -eq "ComputerNameFilter") {
-
-                $IP = $Null
-                $IPAddress = [Net.IPAddress]::TryParse($Value, [Ref] $IP)
-
-                if($IPAddress) {
-                    $Clauses += @("ADAPTER.IPAddress0 $Operator '$($Value)%'")
-                }
-                else {
-                    # otherwise we have a computer name
-                    # $Query += "`nAND COMPUTER.Name0 $Operator '$Value'"
-                    $Clauses += @("COMPUTER.Name0 $Operator '$Value'")
-                }
-            }
-            elseif($_.Key -eq "TimeStampFilter") {
-                # $Query += "`nAND QUERY.TimeStamp $Operator '$Value'"
-                $Clauses += @("QUERY.TimeStamp $Operator '$Value'")
+            if($Query.EndsWith("AS DATA")) {
+                $Query += "`nWHERE ("
             }
             else {
-                # chop off "...Filter"
-                $Field = $_.Key.Substring(0,$_.Key.Length-6)
-                if($NoAppend) {
-                    # $Query += "`nAND QUERY.$($Field) $Operator '$Value'"
-                    $Clauses += @("QUERY.$($Field) $Operator '$Value'")
+                $Query += "`nAND ("
+            }
+            $Clauses = @()
+
+            ForEach ($Value in $Values) {
+
+                if($Value.StartsWith('!')) {
+                    $Operator = "NOT LIKE"
+                    $Value = $Value.Substring(1)
+                }
+                elseif($Value.StartsWith("<") -or $Value.StartsWith(">")) {
+                    $Operator = $Value[0]
+                    $Value = $Value.Substring(1)
                 }
                 else {
-                    # $Query += "`nAND QUERY.$($Field)0 $Operator '$Value'"
-                    $Clauses += @("QUERY.$($Field)0 $Operator '$Value'")
+                    $Operator = "LIKE"
+                }
+
+                if($_.Key -eq "ComputerNameFilter") {
+
+                    $IP = $Null
+                    $IPAddress = [Net.IPAddress]::TryParse($Value, [Ref] $IP)
+
+                    if($IPAddress) {
+                        $Clauses += @("IPAddress $Operator '$($Value)%'")
+                    }
+                    else {
+                        # otherwise we have a computer name
+                        $Clauses += @("ComputerName $Operator '$Value'")
+                    }
+                }
+                else {
+                    # chop off "...Filter"
+                    $Field = $_.Key.Substring(0,$_.Key.Length-6)
+                    $Clauses += @("$Field $Operator '$Value'")
                 }
             }
+            $Query += $Clauses -join " OR "
+            $Query += ")"
         }
-        $Query += $Clauses -join " OR "
-        $Query += ")"
     }
 
     if($Parameters['OrderBy']) {
-        if($Parameters['OrderBy'] -eq "Timestamp") {
-            $Query += "`nORDER BY QUERY.TimeStamp"
-        }
-        else {
-            if($NoAppend) {
-                $Query += "`nORDER BY QUERY.$($OrderBy)"
-            }
-            else {
-                $Query += "`nORDER BY QUERY.$($OrderBy)0"
-            }
-        }
+        $Query += "`nORDER BY $OrderBy"
 
         if($Parameters['Descending']) {
             $Query += " DESC"
@@ -617,10 +607,10 @@ function Get-SCCMService {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
+    .PARAMETER SCCMTimeStampFilter
 
         Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
+        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER DescriptionFilter
 
@@ -641,6 +631,11 @@ function Get-SCCMService {
 
         Query only for results where the PathName field matches the given filter.
         Wildcards accepted.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
 
     .EXAMPLE
 
@@ -679,7 +674,7 @@ function Get-SCCMService {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "Caption","Description","DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ProcessId", "ServiceType", "Started", "StartMode", "StartMode", "State")]
+        [ValidateSet("SCCMTimeStamp", "Caption","Description","DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ProcessId", "ServiceType", "Started", "StartMode", "State")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -692,7 +687,7 @@ function Get-SCCMService {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $SCCMTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -708,37 +703,45 @@ function Get-SCCMService {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $PathNameFilter
+        $PathNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.TimeStamp as SCCMTimeStamp,
-     QUERY.Caption0 as Caption,
-     QUERY.Description0 as Description,
-     QUERY.DisplayName0 as DisplayName,
-     QUERY.ErrorControl0 as ErrorControl,
-     QUERY.ExitCode0 as ExitCode,
-     QUERY.Name0 as Name,
-     QUERY.PathName0 as PathName,
-     QUERY.ProcessId0 as ProcessId,
-     QUERY.ServiceType0 as ServiceType,
-     QUERY.Started0 as Started,
-     QUERY.StartMode0 as StartMode,
-     QUERY.State0 as State
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_HS_SERVICE QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.Caption0 as Caption,
+         QUERY.Description0 as Description,
+         QUERY.DisplayName0 as DisplayName,
+         QUERY.ErrorControl0 as ErrorControl,
+         QUERY.ExitCode0 as ExitCode,
+         QUERY.Name0 as Name,
+         QUERY.PathName0 as PathName,
+         QUERY.ProcessId0 as ProcessId,
+         QUERY.ServiceType0 as ServiceType,
+         QUERY.Started0 as Started,
+         QUERY.StartMode0 as StartMode,
+         QUERY.State0 as State
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_HS_SERVICE QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -782,10 +785,10 @@ function Get-SCCMServiceHistory {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
+    .PARAMETER SCCMTimeStampFilter
 
         Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
+        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER DescriptionFilter
 
@@ -806,6 +809,11 @@ function Get-SCCMServiceHistory {
 
         Query only for results where the PathName field matches the given filter.
         Wildcards accepted.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
 
     .EXAMPLE
 
@@ -837,7 +845,7 @@ function Get-SCCMServiceHistory {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "Caption","Description","DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ProcessId", "ServiceType", "Started", "StartMode", "StartMode", "State")]
+        [ValidateSet("SCCMTimestamp", "Caption","Description","DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ProcessId", "ServiceType", "Started", "StartMode", "State")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -850,7 +858,7 @@ function Get-SCCMServiceHistory {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $SCCMTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -866,37 +874,45 @@ function Get-SCCMServiceHistory {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $PathNameFilter
+        $PathNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.TimeStamp as SCCMTimeStamp,
-     QUERY.Caption0 as Caption,
-     QUERY.Description0 as Description,
-     QUERY.DisplayName0 as DisplayName,
-     QUERY.ErrorControl0 as ErrorControl,
-     QUERY.ExitCode0 as ExitCode,
-     QUERY.Name0 as Name,
-     QUERY.PathName0 as PathName,
-     QUERY.ProcessId0 as ProcessId,
-     QUERY.ServiceType0 as ServiceType,
-     QUERY.Started0 as Started,
-     QUERY.StartMode0 as StartMode,
-     QUERY.State0 as State
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_GS_SERVICE QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.Caption0 as Caption,
+         QUERY.Description0 as Description,
+         QUERY.DisplayName0 as DisplayName,
+         QUERY.ErrorControl0 as ErrorControl,
+         QUERY.ExitCode0 as ExitCode,
+         QUERY.Name0 as Name,
+         QUERY.PathName0 as PathName,
+         QUERY.ProcessId0 as ProcessId,
+         QUERY.ServiceType0 as ServiceType,
+         QUERY.Started0 as Started,
+         QUERY.StartMode0 as StartMode,
+         QUERY.State0 as State
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_GS_SERVICE QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -940,10 +956,10 @@ function Get-SCCMAutoStart {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
+    .PARAMETER SCCMTimeStampFilter
 
         Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
+        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER DescriptionFilter
 
@@ -975,6 +991,11 @@ function Get-SCCMAutoStart {
         Query only for results where the StartupValue field matches the given filter.
         Wildcards accepted.
 
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
     .EXAMPLE
 
         PS C:\> Get-SCCMSession | Get-SCCMAutoStart
@@ -1004,7 +1025,7 @@ function Get-SCCMAutoStart {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "Description", "FileName", "FileVersion", "Location", "Product", "Publisher", "StartupType", "StartupValue")]
+        [ValidateSet("SCCMTimestamp", "Description", "FileName", "FileVersion", "Location", "Product", "Publisher", "StartupType", "StartupValue")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -1017,7 +1038,7 @@ function Get-SCCMAutoStart {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $SCCMTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -1041,33 +1062,41 @@ function Get-SCCMAutoStart {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $StartupValueFilter
+        $StartupValueFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.TimeStamp as SCCMTimeStamp,
-     QUERY.Description0 as Description,
-     QUERY.FileName0 as FileName,
-     QUERY.FileVersion0 as FileVersion,
-     QUERY.Location0 as Location,
-     QUERY.Product0 as Product,
-     QUERY.Publisher0 as Publisher,
-     QUERY.StartupType0 as StartupType,
-     QUERY.StartupValue0 as StartupValue
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_GS_AUTOSTART_SOFTWARE QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.Description0 as Description,
+         QUERY.FileName0 as FileName,
+         QUERY.FileVersion0 as FileVersion,
+         QUERY.Location0 as Location,
+         QUERY.Product0 as Product,
+         QUERY.Publisher0 as Publisher,
+         QUERY.StartupType0 as StartupType,
+         QUERY.StartupValue0 as StartupValue
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_GS_AUTOSTART_SOFTWARE QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -1111,10 +1140,10 @@ function Get-SCCMProcess {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
+    .PARAMETER SCCMTimeStampFilter
 
         Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
+        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER CaptionFilter
         
@@ -1149,6 +1178,11 @@ function Get-SCCMProcess {
     
         Query only for results where the ProcessId field matches the given filter.
 
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
     .EXAMPLE
 
         PS C:\> Get-SCCMSession | Get-SCCMProcess
@@ -1178,7 +1212,7 @@ function Get-SCCMProcess {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "Caption", "CreationDate", "Description", "ExecutablePath", "Name", "ParentProcessId", "ProcessId")]
+        [ValidateSet("SCCMTimestamp", "Caption", "CreationDate", "Description", "ExecutablePath", "Name", "ParentProcessId", "ProcessId")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -1191,7 +1225,7 @@ function Get-SCCMProcess {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $SCCMTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -1219,32 +1253,40 @@ function Get-SCCMProcess {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $ProcessIdFilter
+        $ProcessIdFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.TimeStamp as SCCMTimeStamp,
-     QUERY.Caption0 as Caption,
-     QUERY.CreationDate0 as CreationDate,
-     QUERY.Description0 as Description,
-     QUERY.ExecutablePath0 as ExecutablePath,
-     QUERY.Name0 as Name,
-     QUERY.ParentProcessId0 as ParentProcessId,
-     QUERY.ProcessId0 as ProcessId
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_GS_PROCESS QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.Caption0 as Caption,
+         QUERY.CreationDate0 as CreationDate,
+         QUERY.Description0 as Description,
+         QUERY.ExecutablePath0 as ExecutablePath,
+         QUERY.Name0 as Name,
+         QUERY.ParentProcessId0 as ParentProcessId,
+         QUERY.ProcessId0 as ProcessId
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_GS_PROCESS QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -1288,10 +1330,10 @@ function Get-SCCMProcessHistory {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
+    .PARAMETER SCCMTimeStampFilter
 
         Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
+        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER CaptionFilter
         
@@ -1326,6 +1368,11 @@ function Get-SCCMProcessHistory {
     
         Query only for results where the ProcessId field matches the given filter.
 
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
     .EXAMPLE
 
         PS C:\> Get-SCCMSession | Get-SCCMProcessHistory
@@ -1355,7 +1402,7 @@ function Get-SCCMProcessHistory {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "Caption", "CreationDate", "Description", "ExecutablePath", "Name", "ParentProcessId", "ProcessId")]
+        [ValidateSet("SCCMTimestamp", "Caption", "CreationDate", "Description", "ExecutablePath", "Name", "ParentProcessId", "ProcessId")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -1368,7 +1415,7 @@ function Get-SCCMProcessHistory {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $SCCMTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -1396,32 +1443,40 @@ function Get-SCCMProcessHistory {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $ProcessIdFilter
+        $ProcessIdFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.TimeStamp as SCCMTimeStamp,
-     QUERY.Caption0 as Caption,
-     QUERY.CreationDate0 as CreationDate,
-     QUERY.Description0 as Description,
-     QUERY.ExecutablePath0 as ExecutablePath,
-     QUERY.Name0 as Name,
-     QUERY.ParentProcessId0 as ParentProcessId,
-     QUERY.ProcessId0 as ProcessId
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_HS_PROCESS QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.Caption0 as Caption,
+         QUERY.CreationDate0 as CreationDate,
+         QUERY.Description0 as Description,
+         QUERY.ExecutablePath0 as ExecutablePath,
+         QUERY.Name0 as Name,
+         QUERY.ParentProcessId0 as ParentProcessId,
+         QUERY.ProcessId0 as ProcessId
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_HS_PROCESS QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -1465,10 +1520,10 @@ function Get-SCCMRecentlyUsedApplication {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
+    .PARAMETER SCCMTimeStampFilter
 
         Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
+        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER CompanyNameFilter
 
@@ -1525,6 +1580,11 @@ function Get-SCCMRecentlyUsedApplication {
         Query only for results where the ProductVersion field matches the given filter.
         Wildcards accepted.
 
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
     .EXAMPLE
 
         PS C:\> Get-SCCMSession | Get-SCCMRecentlyUsedApplication
@@ -1554,7 +1614,7 @@ function Get-SCCMRecentlyUsedApplication {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "CompanyName", "ExplorerFileName", "FileDescription", "FileSize", "FileVersion", "FolderPath", "LastUsedTime", "LastUserName", "OriginalFileName", "ProductName", "ProductVersion")]
+        [ValidateSet("SCCMTimestamp", "CompanyName", "ExplorerFileName", "FileDescription", "FileSize", "FileVersion", "FolderPath", "LastUsedTime", "LastUserName", "OriginalFileName", "ProductName", "ProductVersion")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -1567,7 +1627,7 @@ function Get-SCCMRecentlyUsedApplication {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $SCCMTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -1611,36 +1671,44 @@ function Get-SCCMRecentlyUsedApplication {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $ProductVersionFilter
+        $ProductVersionFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.TimeStamp as SCCMTimeStamp,
-     QUERY.CompanyName0 as CompanyName,
-     QUERY.ExplorerFileName0 as ExplorerFileName,
-     QUERY.FileDescription0 as FileDescription,
-     QUERY.FileSize0 as FileSize,
-     QUERY.FileVersion0 as FileVersion,
-     QUERY.FolderPath0 as FolderPath,
-     QUERY.LastUsedTime0 as LastUsedTime,
-     QUERY.LastUserName0 as LastUserName,
-     QUERY.OriginalFileName0 as OriginalFileName,
-     QUERY.ProductName0 as ProductName,
-     QUERY.ProductVersion0 as ProductVersion
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_GS_CCM_RECENTLY_USED_APPS QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.CompanyName0 as CompanyName,
+         QUERY.ExplorerFileName0 as ExplorerFileName,
+         QUERY.FileDescription0 as FileDescription,
+         QUERY.FileSize0 as FileSize,
+         QUERY.FileVersion0 as FileVersion,
+         QUERY.FolderPath0 as FolderPath,
+         QUERY.LastUsedTime0 as LastUsedTime,
+         QUERY.LastUserName0 as LastUserName,
+         QUERY.OriginalFileName0 as OriginalFileName,
+         QUERY.ProductName0 as ProductName,
+         QUERY.ProductVersion0 as ProductVersion
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_GS_CCM_RECENTLY_USED_APPS QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -1684,10 +1752,10 @@ function Get-SCCMDriver {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
+    .PARAMETER SCCMTimeStampFilter
 
         Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
+        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER CaptionFilter
 
@@ -1724,6 +1792,11 @@ function Get-SCCMDriver {
         Query only for results where the State field matches the given filter.
         Wildcards accepted.
 
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
     .EXAMPLE
 
         PS C:\> Get-SCCMSession | Get-SCCMDriver
@@ -1753,7 +1826,7 @@ function Get-SCCMDriver {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "Caption", "Description", "DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ServiceType", "StartMode", "State")]
+        [ValidateSet("SCCMTimestamp", "Caption", "Description", "DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ServiceType", "StartMode", "State")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -1766,7 +1839,7 @@ function Get-SCCMDriver {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $SCCMTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -1794,35 +1867,43 @@ function Get-SCCMDriver {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $StateFilter
+        $StateFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.TimeStamp as SCCMTimeStamp,
-     QUERY.Caption0 as Caption,
-     QUERY.Description0 as Description,
-     QUERY.DisplayName0 as DisplayName,
-     QUERY.ErrorControl0 as ErrorControl,
-     QUERY.ExitCode0 as ExitCode,
-     QUERY.Name0 as Name,
-     QUERY.PathName0 as PathName,
-     QUERY.ServiceType0 as ServiceType,
-     QUERY.StartMode0 as StartMode,
-     QUERY.State0 as State
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_GS_SYSTEM_DRIVER QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.Caption0 as Caption,
+         QUERY.Description0 as Description,
+         QUERY.DisplayName0 as DisplayName,
+         QUERY.ErrorControl0 as ErrorControl,
+         QUERY.ExitCode0 as ExitCode,
+         QUERY.Name0 as Name,
+         QUERY.PathName0 as PathName,
+         QUERY.ServiceType0 as ServiceType,
+         QUERY.StartMode0 as StartMode,
+         QUERY.State0 as State
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_GS_SYSTEM_DRIVER QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -1866,10 +1947,10 @@ function Get-SCCMConsoleUsage {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
+    .PARAMETER SCCMTimeStampFilter
 
         Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
+        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER SystemConsoleUserFilter
 
@@ -1890,6 +1971,11 @@ function Get-SCCMConsoleUsage {
 
         Query only for results where the TotalUserConsoleMinutes field matches the given filter.
         Wildcards accepted.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
 
     .EXAMPLE
 
@@ -1920,7 +2006,7 @@ function Get-SCCMConsoleUsage {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "SystemConsoleUser", "LastConsoleUse", "NumberOfConsoleLogons", "TotalUserConsoleMinutes")]
+        [ValidateSet("SCCMTimestamp", "SystemConsoleUser", "LastConsoleUse", "NumberOfConsoleLogons", "TotalUserConsoleMinutes")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -1933,7 +2019,7 @@ function Get-SCCMConsoleUsage {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $SCCMTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -1949,29 +2035,37 @@ function Get-SCCMConsoleUsage {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TotalUserConsoleMinutesFilter
+        $TotalUserConsoleMinutesFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.TimeStamp as SCCMTimeStamp,
-     QUERY.SystemConsoleUser0 as SystemConsoleUser,
-     QUERY.LastConsoleUse0 as LastConsoleUse,
-     QUERY.NumberOfConsoleLogons0 as NumberOfConsoleLogons,
-     QUERY.TotalUserConsoleMinutes0 as TotalUserConsoleMinutes
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_GS_SYSTEM_CONSOLE_USER QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.SystemConsoleUser0 as SystemConsoleUser,
+         QUERY.LastConsoleUse0 as LastConsoleUse,
+         QUERY.NumberOfConsoleLogons0 as NumberOfConsoleLogons,
+         QUERY.TotalUserConsoleMinutes0 as TotalUserConsoleMinutes
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_GS_SYSTEM_CONSOLE_USER QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -2016,11 +2110,6 @@ function Get-SCCMSoftwareFile {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
-
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
-
     .PARAMETER FileNameFilter
 
         Query only for results where the FileName field matches the given filter.
@@ -2051,6 +2140,11 @@ function Get-SCCMSoftwareFile {
         Query only for results where the FileModifiedDate field matches the given filter.
         Wildcards accepted.
 
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
     .EXAMPLE
 
         PS C:\> Get-SCCMSession | Get-SCCMSoftwareFile
@@ -2080,7 +2174,7 @@ function Get-SCCMSoftwareFile {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "FileName", "FileDescription", "FileVersion", "FileSize", "FilePath", "FileModifiedDate")]
+        [ValidateSet("FileName", "FileDescription", "FileVersion", "FileSize", "FilePath", "FileModifiedDate")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -2090,10 +2184,6 @@ function Get-SCCMSoftwareFile {
         [String]
         [ValidateNotNullOrEmpty()]
         $ComputerNameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -2117,34 +2207,42 @@ function Get-SCCMSoftwareFile {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $FileModifiedDateFilter
+        $FileModifiedDateFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.FileName,
-     QUERY.FileDescription,
-     QUERY.FileVersion,
-     QUERY.FileSize,
-     QUERY.FilePath,
-     QUERY.FileModifiedDate
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_GS_SoftwareFile QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.FileName as FileName,
+         QUERY.FileDescription as FileDescription,
+         QUERY.FileVersion as FileVersion,
+         QUERY.FileSize as FileSize,
+         QUERY.FilePath as FilePath,
+         QUERY.FileModifiedDate as FileModifiedDate
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_GS_SoftwareFile QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters -NoAppend
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
     }
 
     process {   
@@ -2184,10 +2282,10 @@ function Get-SCCMBrowserHelperObject {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
+    .PARAMETER SCCMTimeStampFilter
 
         Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
+        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER BinFileVersionFilter
 
@@ -2234,6 +2332,11 @@ function Get-SCCMBrowserHelperObject {
         Query only for results where the Version field matches the given filter.
         Wildcards accepted.
 
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
     .EXAMPLE
 
         PS C:\> Get-SCCMSession | Get-SCCMBrowserHelperObject
@@ -2263,7 +2366,7 @@ function Get-SCCMBrowserHelperObject {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "BinFileVersion", "BinProductVersion", "Description", "FileName", "FileVersion", "Product", "ProductVersion", "Publisher", "Version")]
+        [ValidateSet("SCCMTimestamp", "BinFileVersion", "BinProductVersion", "Description", "FileName", "FileVersion", "Product", "ProductVersion", "Publisher", "Version")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -2276,7 +2379,7 @@ function Get-SCCMBrowserHelperObject {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $SCCMTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -2312,34 +2415,42 @@ function Get-SCCMBrowserHelperObject {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $VersionFilter
+        $VersionFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.TimeStamp as SCCMTimeStamp,
-     QUERY.BinFileVersion0 as BinFileVersion,
-     QUERY.BinProductVersion0 as BinProductVersion,
-     QUERY.Description0 as Description,
-     QUERY.FileName0 as FileName,
-     QUERY.FileVersion0 as FileVersion,
-     QUERY.Product0 as Product,
-     QUERY.ProductVersion0 as ProductVersion,
-     QUERY.Publisher0 as Publisher,
-     QUERY.Version0 as Version
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_GS_BROWSER_HELPER_OBJECT QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.BinFileVersion0 as BinFileVersion,
+         QUERY.BinProductVersion0 as BinProductVersion,
+         QUERY.Description0 as Description,
+         QUERY.FileName0 as FileName,
+         QUERY.FileVersion0 as FileVersion,
+         QUERY.Product0 as Product,
+         QUERY.ProductVersion0 as ProductVersion,
+         QUERY.Publisher0 as Publisher,
+         QUERY.Version0 as Version
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_GS_BROWSER_HELPER_OBJECT QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -2383,10 +2494,10 @@ function Get-SCCMShare {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER TimeStampFilter
+    .PARAMETER SCCMTimeStampFilter
 
         Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -TimeStampFilter > '2012-03-01 00:00:00.000')
+        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER CaptionFilter
 
@@ -2407,6 +2518,11 @@ function Get-SCCMShare {
 
         Query only for results where the Path field matches the given filter.
         Wildcards accepted.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
 
     .EXAMPLE
 
@@ -2437,7 +2553,7 @@ function Get-SCCMShare {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "Caption", "Description", "Name", "Path")]
+        [ValidateSet("SCCMTimestamp", "Caption", "Description", "Name", "Path")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -2450,7 +2566,7 @@ function Get-SCCMShare {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $SCCMTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -2466,29 +2582,37 @@ function Get-SCCMShare {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $PathFilter
+        $PathFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY.TimeStamp as SCCMTimeStamp,
-     QUERY.Caption0 as Caption,
-     QUERY.Description0 as Description,
-     QUERY.Name0 as Name,
-     QUERY.Path0 as Path
-FROM
-     v_R_System COMPUTER
-JOIN
-     v_GS_SHARE QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.Caption0 as Caption,
+         QUERY.Description0 as Description,
+         QUERY.Name0 as Name,
+         QUERY.Path0 as Path
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         v_GS_SHARE QUERY ON COMPUTER.ResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -2537,6 +2661,11 @@ function Get-SCCMPrimaryUser {
         Query only for results where the Unique_User_Name field matches the given filter.
         Wildcards accepted.
 
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
     .EXAMPLE
 
         PS C:\> Get-SCCMSession | Get-SCCMPrimaryUser
@@ -2566,7 +2695,7 @@ function Get-SCCMPrimaryUser {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Timestamp", "Caption", "Description", "Name", "Path")]
+        [ValidateSet("ComputerName", "IPAddress", "UserResourceID", "Unique_User_Name")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -2579,32 +2708,36 @@ function Get-SCCMPrimaryUser {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $TimeStampFilter,
+        $Unique_User_NameFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $Unique_User_NameFilter
+        $Filter
     )
 
     begin {
 
         $Query = @"
-SELECT TOP $Newest
-     COMPUTER.ResourceID as ResourceID,
-     COMPUTER.Name0 as ComputerName,
-     ADAPTER.IPAddress0 as IPAddress,
-     QUERY2.UserResourceID as UserResourceID,
-     QUERY.Unique_User_Name0 as Unique_User_Name
-FROM
-     v_R_System COMPUTER
-JOIN
-     vMDMUsersPrimaryMachines QUERY2 ON COMPUTER.ResourceID = QUERY2.MachineID
-JOIN
-     v_R_User QUERY ON QUERY2.UserResourceID = QUERY.ResourceID
-JOIN
-     v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
-WHERE
-     ADAPTER.IPAddress0 is not null
+SELECT * FROM
+(
+    SELECT TOP $Newest
+         COMPUTER.ResourceID as ResourceID,
+         COMPUTER.Name0 as ComputerName,
+         ADAPTER.IPAddress0 as IPAddress,
+         QUERY2.UserResourceID as UserResourceID,
+         QUERY.Unique_User_Name0 as Unique_User_Name
+    FROM
+         v_R_System COMPUTER
+    JOIN
+         vMDMUsersPrimaryMachines QUERY2 ON COMPUTER.ResourceID = QUERY2.MachineID
+    JOIN
+         v_R_User QUERY ON QUERY2.UserResourceID = QUERY.ResourceID
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
+)
+    AS DATA
 "@
 
         # add in our filter logic
@@ -2833,9 +2966,7 @@ function Find-SCCMMimikatz {
     )
 
     process {
-        $mimi1 = @(Get-SCCMRecentlyUsedApplication -Session $Session -CompanyNameFilter "*gentilkiwi*")
-        $mimi2 = @(Get-SCCMRecentlyUsedApplication -Session $Session -FileDescriptionFilter "*mimikatz*")
-        $mimi1 + $mimi2 | Sort-Object -Unique
+        Get-SCCMRecentlyUsedApplication -Session $Session -Filter "(CompanyName LIKE '%gentilkiwi%') OR (FileDescription LIKE '%mimikatz%')"
     }
 }
 
