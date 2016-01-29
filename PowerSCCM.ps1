@@ -358,66 +358,6 @@ function Remove-SCCMSession {
 }
 
 
-function Find-SCCMDatabase {
-<#
-    .SYNOPSIS
-
-        Takes a given SCCM database service identified by -ComputerName
-        and returns all current database names.
-
-    .PARAMETER ComputerName
-
-        The name key of an SCCM database to create a temporary connection to for
-        the query.
-
-    .PARAMETER Credential
-
-        A [Management.Automation.PSCredential] object that stores a SqlUserName and SqlPassword.
-
-    .PARAMETER SqlUserName
-
-        Specific MSSQL username to use instead of integrated Windows authentication.
-
-    .PARAMETER SqlPassword
-
-        Specific MSSQL username to use instead of integrated Windows authentication.
-#>
-    [CmdletBinding(DefaultParameterSetName = 'None')]
-    param(
-        [Parameter(Position = 0, Mandatory=$True, ValueFromPipeline=$True)]
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $ComputerName,
-
-        [Parameter(ParameterSetName = 'PSCredential')]
-        [Management.Automation.PSCredential]
-        [Management.Automation.CredentialAttribute()]
-        $Credential = [Management.Automation.PSCredential]::Empty,
-
-        [Parameter(Position = 1, Mandatory=$True, ParameterSetName = 'SQLCredentials')]
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $SqlUserName,
-
-        [Parameter(Position = 2, Mandatory=$True, ParameterSetName = 'SQLCredentials')]
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $SqlPassword
-    )
-
-    process {
-        try {
-            $Session = New-SCCMSession -DatabaseName 'master' @PSBoundParameters
-            $Session | Invoke-SQLQuery -Query 'select * from sys.databases' | Where-Object {$_.Name -like "CM_*"} | Select-Object name
-            $Session | Remove-SCCMSession
-        }
-        catch {
-            Write-Error "Error enumerating server '$ComputerName' : $_"
-        }
-    }
-}
-
-
 function Invoke-SQLQuery {
 <#
     .SYNOPSIS
@@ -572,7 +512,578 @@ function Get-FilterQuery {
 
 ##############################################
 #
-# Common queries.
+# Functions that query or modified information
+# in the SCCM database/server itself (as opposed) to
+# client information in the SCCM database).
+#
+##############################################
+
+
+function Find-SCCMDatabase {
+<#
+    .SYNOPSIS
+
+        Takes a given SCCM database service identified by -ComputerName
+        and returns all current database names.
+
+    .PARAMETER ComputerName
+
+        The name key of an SCCM database to create a temporary connection to for
+        the query.
+
+    .PARAMETER Credential
+
+        A [Management.Automation.PSCredential] object that stores a SqlUserName and SqlPassword.
+
+    .PARAMETER SqlUserName
+
+        Specific MSSQL username to use instead of integrated Windows authentication.
+
+    .PARAMETER SqlPassword
+
+        Specific MSSQL username to use instead of integrated Windows authentication.
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Position = 0, Mandatory=$True, ValueFromPipeline=$True)]
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ComputerName,
+
+        [Parameter(ParameterSetName = 'PSCredential')]
+        [Management.Automation.PSCredential]
+        [Management.Automation.CredentialAttribute()]
+        $Credential = [Management.Automation.PSCredential]::Empty,
+
+        [Parameter(Position = 1, Mandatory=$True, ParameterSetName = 'SQLCredentials')]
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $SqlUserName,
+
+        [Parameter(Position = 2, Mandatory=$True, ParameterSetName = 'SQLCredentials')]
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $SqlPassword
+    )
+
+    process {
+        try {
+            $Session = New-SCCMSession -DatabaseName 'master' @PSBoundParameters
+            $Session | Invoke-SQLQuery -Query 'select * from sys.databases' | Where-Object {$_.Name -like "CM_*"} | Select-Object name
+            $Session | Remove-SCCMSession
+        }
+        catch {
+            Write-Error "Error enumerating server '$ComputerName' : $_"
+        }
+    }
+}
+
+
+function Get-SCCMApplicationCI {
+<#
+    .SYNOPSIS
+
+        Returns applications that exist on the primary site server.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER Newest
+
+        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Detaults to the max value of a 32-bit integer (2147483647).
+
+    .PARAMETER OrderBy
+
+        Order the results by a particular field.
+
+    .PARAMETER Descending
+
+        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
+        the given field in descending order.
+
+    .PARAMETER CreatedByFilter
+
+        Query only for results where the CreatedBy field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER DisplayNameFilter
+
+        Query only for results where the DisplayName field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER CI_IDFilter
+
+        Query only for results where the CI_ID field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER DeploymentTypeName
+
+        Query only for results where the DeploymentType field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER DTInstallString
+
+        Query only for results where the DTInstallString field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER DateCreatedFilter
+
+        Query only for results where the DateCreated field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER LastModifiedFilter
+
+        Query only for results where the LastModified field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER LastModifiedByFilter
+
+        Query only for results where the LastModifiedBy field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER IsHidden
+
+        Query only for results where the IsHidden field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMApplicationCI
+
+        Runs the query against all current SCCM sessions.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMApplicationCI -IsHiddenFilter 1
+
+        Finds all hidden user deployed application configuration items.
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
+        [String]
+        [ValidateSet("CreatedBy", "DisplayName", "CI_ID", "DeploymentTypeName", "Technology", "ContentSource", "DTInstallString", "DTUnInstallString", "DateCreated", "LastModified", "LastModifiedBy", "IsHidden")]
+        $OrderBy,
+
+        [Parameter(ParameterSetName = 'OrderBy')]
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CreatedByFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DisplayNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CI_IDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DeploymentTypeNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DTInstallStringFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DateCreatedFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $LastModifiedFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $LastModifiedByFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $IsHiddenFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter        
+    )
+
+    begin {
+
+        $Query = @"
+SELECT * FROM
+(
+    SELECT DISTINCT TOP $Newest
+         app.CreatedBy AS CreatedBy,
+         app.DisplayName AS DisplayName,
+         app.CI_ID AS CI_ID,
+         dt.DisplayName AS DeploymentTypeName,
+         dt.Technology AS Technology,
+         v_ContentInfo.ContentSource AS ContentSource,
+         v_ContentInfo.SourceSize AS ContentSourceSize,
+         dt.SDMPackageDigest.value('declare namespace p1="http://schemas.microsoft.com/SystemCenterConfigurationManager/2009/AppMgmtDigest";
+         (p1:AppMgmtDigest/p1:DeploymentType/p1:Installer/p1:CustomData/p1:InstallCommandLine)[1]', 'nvarchar(max)') AS DTInstallString,
+         dt.SDMPackageDigest.value('declare namespace p1="http://schemas.microsoft.com/SystemCenterConfigurationManager/2009/AppMgmtDigest";
+         (p1:AppMgmtDigest/p1:DeploymentType/p1:Installer/p1:CustomData/p1:UninstallCommandLine)[1]', 'nvarchar(max)') AS DTUnInstallString,
+         app.DateCreated AS DateCreated,
+         app.DateLastModified AS LastModified,
+         app.LastModifiedBy AS LastModifiedBy,
+         app.IsHidden AS IsHidden
+    FROM 
+         dbo.fn_ListDeploymentTypeCIs(1033) AS dt INNER JOIN
+         dbo.fn_ListLatestApplicationCIs(1033) AS app ON dt.AppModelName = app.ModelName LEFT OUTER JOIN
+         v_ContentInfo ON dt.ContentId = v_ContentInfo.Content_UniqueID
+    WHERE   
+         (dt.IsLatest = 1)
+)
+    AS DATA
+"@
+
+        # add in our filter logic
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}
+
+
+function Get-SCCMPackage {
+<#
+    .SYNOPSIS
+
+        Returns SCCM packages that exist on the primary site server.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER Newest
+
+        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Detaults to the max value of a 32-bit integer (2147483647).
+
+    .PARAMETER OrderBy
+
+        Order the results by a particular field.
+
+    .PARAMETER Descending
+
+        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
+        the given field in descending order.
+
+    .PARAMETER PackageIDFilterFilter
+
+        Query only for results where the PackageID field matches the given filter.
+        Wildcards accepted.
+
+    .PARAMETER PackageNameFilter
+
+        Query only for results where the PackageName field matches the given filter.
+        Wildcards accepted.    
+
+    .PARAMETER ProgramNameFilter
+
+        Query only for results where the ProgramName field matches the given filter.
+        Wildcards accepted.    
+
+    .PARAMETER CommandLineFilter
+
+        Query only for results where the CommandLine field matches the given filter.
+        Wildcards accepted.    
+
+    .PARAMETER SourcePathFilter
+
+        Query only for results where the SourcePath field matches the given filter.
+        Wildcards accepted.    
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMPackage
+
+        Runs the query against all current SCCM sessions.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMPackage -Verbose -SourcePathFilter '\\PRIMARY.testlab.local\*'
+
+        Returns packaged with a source location on \\PRIMARY.testlab.local\
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [String]
+        [ValidateSet("PackageID", "PackageName", "ProgramName", "CommandLine", "SourcePath")]
+        $OrderBy = "PackageID",
+
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $PackageIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $PackageNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ProgramNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CommandLineFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $SourcePathFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
+    )
+
+    begin {
+
+        $Query = @"
+SELECT * FROM
+(
+    SELECT TOP $Newest
+        Program.PackageID AS PackageID,
+        Package.Name AS PackageName,
+        Program.ProgramName AS ProgramName,
+        Program.CommandLine AS CommandLine,
+        Package.PkgSourcePath AS SourcePath
+    FROM 
+        v_Program Program
+    LEFT JOIN 
+        v_Package Package on Package.PackageID = Program.PackageID
+)
+    AS DATA
+"@
+
+        # add in our filter logic
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}
+
+
+function Get-SCCMConfigurationItem {
+<#
+    .SYNOPSIS
+
+        Returns SCCM configuration items that exist on the primary site server.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMConfigurationItem -CI_IDFilter 12345
+
+        Returns the configuration item with ID 12345
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMConfigurationItem -IsHiddenFilter 1 -IsUserDefinedFilter 1
+
+        Returns the all user defined configuration items that are marked as hidden.
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
+        [String]
+        [ValidateSet("CI_UniqueID", "ModelId", "CIVersion", "SDMPackageDigest", "CIType_ID", "PolicyVersion", "DateCreated", "DateLastModified", "LastModifiedBy", "LocalDateLastReplicated", "CreatedBy", "PermittedUses", "IsBundle", "IsHidden", "IsTombstoned", "IsUserDefined", "IsEnabled", "IsExpired", "IsLatest", "SourceSite", "ContentSourcePath", "ApplicabilityCondition", "Precedence", "CI_CRC", "IsUserCI", "ApplicableAtUserLogon", "RevisionTag", "SEDOComponentID", "MinRequiredVersion")]
+        $OrderBy,
+
+        [Parameter(ParameterSetName = 'OrderBy')]
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CI_IDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CI_UniqueIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DateCreatedFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DateLastModifiedFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $LastModifiedByFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CreatedByFilter,
+
+        [String]
+        [ValidateSet("0", "1")]
+        $IsHiddenFilter,
+
+        [String]
+        [ValidateSet("0", "1")]
+        $IsUserDefinedFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
+    )
+
+    begin {
+
+        $Query = @"
+SELECT TOP $Newest
+    * from CI_ConfigurationItems QUERY
+WHERE
+     CI_ID is not null
+"@
+
+        # add in our filter logic
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}
+
+
+function Set-SCCMConfigurationItem {
+<#
+    .SYNOPSIS
+
+        Sets a field to a particular value for a SCCM configuration keyed by CI_ID.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER CI_ID
+
+        The configuration interface ID of the application to manipulate.
+        You can retrieve this with Get-SCCMApplication or Get-SCCMConfigurationItem.
+
+    .PARAMETER Column
+
+        The column/field name to set.
+
+    .PARAMETER Value
+
+        Value to set the Field to.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Set-SCCMConfigurationItem -CI_ID 12345 -Field IsHidden -Value 1
+
+        Set the configuration item with If 12345 to be hidden from the SCCM GUi.
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Parameter(Mandatory=$True)]
+        [String]
+        $CI_ID,
+
+        [Parameter(Mandatory=$True)]
+        [String]
+        [ValidateSet("CI_UniqueID", "ModelId", "CIVersion", "CIType_ID", "PolicyVersion", "DateCreated", "DateLastModified", "LastModifiedBy", "LocalDateLastReplicated", "CreatedBy", "PermittedUses", "IsBundle", "IsHidden", "IsTombstoned", "IsUserDefined", "IsEnabled", "IsExpired", "IsLatest", "SourceSite", "ContentSourcePath", "ApplicabilityCondition", "Precedence", "CI_CRC", "IsUserCI", "ApplicableAtUserLogon", "RevisionTag", "SEDOComponentID", "MinRequiredVersion")]
+        $Column,
+
+        [Parameter(Mandatory=$True)]
+        [String]
+        $Value,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
+    )
+
+    begin {
+
+        # get the SQL wildcards correct
+        $CI_ID = $CI_ID.Replace('*', '%')
+
+        $Query = @"
+UPDATE 
+    CI_ConfigurationItems
+SET 
+    $Column=$Value
+WHERE
+    CI_ID LIKE '$CI_ID'
+"@
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}
+
+
+##############################################
+#
+# Common defensive queries involving information
+# collected from client machines.
 #
 ##############################################
 
@@ -2753,6 +3264,7 @@ SELECT * FROM
 ##############################################
 #
 # Common meta-queries to search for 'bad' things
+# from information collected from client machines.
 #
 ##############################################
 

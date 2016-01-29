@@ -33,6 +33,26 @@ To retrieve all current SCCM session objects, us **Get-SCCMSession** with option
 `Get-SCCMSession | Remove-SCCMSession`
 
 
+## SCCM Database/Server Functions
+
+Various functions that deal with querying/changing information concerning the SCCM database or server, as opposed to dealing with querying inventoried client information.
+
+### Find-SCCMDatabase
+Finds the accessible SCCM databases given a MSSQL server.
+
+### Get-SCCMApplicationCI
+Returns information on user-deployed applications in an SCCM database.
+
+### Get-SCCMPackage
+Returns information on user-deployed packages in an SCCM database.
+
+### Get-SCCMConfigurationItem
+Returns SCCM configuration items in an SCCM database.
+
+### Set-SCCMConfigurationItem
+Sets a field to a particular value for a SCCM configuration keyed by CI_ID.
+
+
 ## Get-SCCM*
 
 Query functions require -Session <PowerSCCM.Session> (passable on the pipeline):
