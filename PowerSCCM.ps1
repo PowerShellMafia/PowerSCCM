@@ -118,11 +118,30 @@ function New-SCCMSession {
         $SCCMSessionObject | Add-Member Noteproperty 'Name' $($DatabaseName + $Script:SCCMSessionCounter)
         $SCCMSessionObject | Add-Member Noteproperty 'ComputerName' $ComputerName
         $SCCMSessionObject | Add-Member Noteproperty 'DatabaseName' $DatabaseName
+        $SCCMSessionObject | Add-Member Noteproperty 'SCCMVersion' $Null
+        $SCCMSessionObject | Add-Member Noteproperty 'Permissions' $Null
         $SCCMSessionObject | Add-Member Noteproperty 'SqlConnection' $SQLConnection
         
         # add in our custom object type
         $SCCMSessionObject.PSObject.TypeNames.Add('PowerSCCM.Session')
         
+        # get the SCCM version used
+        $SCCMVersionQuery = "SELECT TOP 1 LEFT(Client_Version0,CHARINDEX('.',Client_Version0)-1) as SCCM_Version FROM v_R_System"
+        $SCCMVersion = (Invoke-SQLQuery -Session $SCCMSessionObject -Query $SCCMVersionQuery).SCCM_Version
+        $SCCMSessionObject.SCCMVersion = $SCCMVersion
+
+        # get the current user database permissions
+        $PermissionsQuery = "SELECT permission_name FROM fn_my_permissions (NULL, 'DATABASE')"
+        $Permissions = Invoke-SQLQuery -Session $SCCMSessionObject -Query $PermissionsQuery | ForEach-Object { $_.permission_name }
+        $SCCMSessionObject.Permissions = $Permissions
+
+        if(!($Permissions -contains "SELECT")) {
+            Write-Warning "Current user does not have SELECT permissions!"
+        }
+        if(!($Permissions -contains "UPDATE")) {
+            Write-Warning "Current user does not have UPDATE permissions!"
+        }
+
         # return the new session object to the pipeline        
         $SCCMSessionObject
 
@@ -386,6 +405,19 @@ function Invoke-SQLQuery {
     )
 
     process {
+
+        if($Query.Trim().StartsWith("-- MIN_SCCM_VERSION")) {
+            # if the query specifies a minimum version, make sure this connection complies
+            $FirstLine = $($Query -Split "\n")[0]
+            $MinVersion = ($FirstLine -Split "=")[1].trim()
+
+            if($MinVersion) {
+                if($MinVersion -gt $($Session.SCCMVersion)) {
+                    Throw "Query requires a minimum SCCM version ($MinVersion) higher than the current connection ($($Session.SCCMVersion))!"
+                }
+            }
+        }
+
         Write-Verbose "Running query on session $($Session.Name): $Query"
 
         $SqlAdapter = New-Object System.Data.SqlClient.SqlDataAdapter($Query, $Session.SqlConnection)
@@ -569,7 +601,7 @@ function Find-SCCMDatabase {
     process {
         try {
             $Session = New-SCCMSession -DatabaseName 'master' @PSBoundParameters
-            $Session | Invoke-SQLQuery -Query 'select * from sys.databases' | Where-Object {$_.Name -like "CM_*"} | Select-Object name
+            $Session | Invoke-SQLQuery -Query "SELECT name FROM Sys.Databases WHERE name LIKE 'CM_%' AND state_desc = 'ONLINE'"
             $Session | Remove-SCCMSession
         }
         catch {
@@ -3229,6 +3261,7 @@ function Get-SCCMPrimaryUser {
     begin {
 
         $Query = @"
+-- MIN_SCCM_VERSION = 5
 SELECT * FROM
 (
     SELECT TOP $Newest
