@@ -3546,3 +3546,555 @@ function Find-SCCMMimikatzFile {
         Get-SCCMSoftwareFile -Session $Session -FileDescriptionFilter "*mimikatz*"
     }
 }
+
+
+##############################################
+#
+# Active Directory related cmdlets
+#
+##############################################
+
+function Get-SCCMADForest {
+<#
+    .SYNOPSIS
+
+        Returns information on Active Directory forests enumerated
+        by SCCM agents.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER Newest
+
+        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Detaults to the max value of a 32-bit integer (2147483647).
+
+    .PARAMETER OrderBy
+
+        Order the results by a particular field.
+
+    .PARAMETER Descending
+
+        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
+        the given field in descending order.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause. Form of "Description like '%testlab%'""
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMADForest
+
+        Runs the query against all current SCCM sessions.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMADForest -DescriptionFilter "*testlab*"
+
+        Returns information on forests with 'testlab' in the description.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMADForest -Filter "Description like '%testlab%'"
+
+        Returns information on forests with 'testlab' in the description.
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
+        [String]
+        [ValidateSet("CreatedOn", "Description", "DiscoveryEnabled", "ForestFQDN", "ForestID", "ModifiedBy", "ModifiedOn", "PublishingEnabled", "PublishingPath", "Tombstoned", "LastDiscoveryTime", "Account", "LastDiscoveryStatus", "PublishingStatus", "DiscoveredTrusts", "DiscoveredDomains", "DiscoveredADSites", "DiscoveredIPSubnets")]
+        $OrderBy,
+
+        [Parameter(ParameterSetName = 'OrderBy')]
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CreatedByFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CreatedOnFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DescriptionFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DiscoveryEnabledFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ForestFQDNFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ForestIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ModifiedByFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ModifiedOnFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $LastDiscoveryTimeFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DiscoveredTrustsFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DiscoveredDomainsFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DiscoveredADSitesFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DiscoveredIPSubnetsFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
+    )
+
+    begin {
+
+        $Query = @"
+SELECT TOP $Newest
+    ForestFQDN,
+    Description,
+    ForestID,
+    CreatedBy,
+    CreatedOn,
+    DiscoveryEnabled,
+    ModifiedBy,
+    ModifiedOn,
+    PublishingEnabled,
+    PublishingPath,
+    Tombstoned,
+    LastDiscoveryTime,
+    Account,
+    LastDiscoveryStatus,
+    PublishingStatus,
+    DiscoveredTrusts,
+    DiscoveredDomains,
+    DiscoveredADSites,
+    DiscoveredIPSubnets
+FROM
+    vActiveDirectoryForests
+"@
+
+        # add in our filter logic
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}
+
+
+function Get-SCCMADUser {
+<#
+    .SYNOPSIS
+
+        Returns information on Active Directory users enumerated
+        by SCCM agents.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER Newest
+
+        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Detaults to the max value of a 32-bit integer (2147483647).
+
+    .PARAMETER OrderBy
+
+        Order the results by a particular field.
+
+    .PARAMETER Descending
+
+        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
+        the given field in descending order.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause. Form of "Description like '%testlab%'""
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMADUser
+
+        Runs the query against all current SCCM sessions.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMADUser -Distinguished_Name '*will*'
+
+        Returns information on groups with 'will' in the distinguished name.
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
+        [String]
+        [ValidateSet("ResourceId", "ResourceType", "CloudUserId", "Creation_Date", "Distinguished_Name", "Full_Domain_Name", "Full_User_Name", "Mail", "Name", "Network_Operating_System", "Object_GUID", "Primary_Group_ID", "SID", "Unique_User_Name", "User_Account_Control", "User_Name", "User_Principal_Name", "Windows_NT_Domain")]
+        $OrderBy,
+
+        [Parameter(ParameterSetName = 'OrderBy')]
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ResourceIdFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $User_NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $User_Principal_NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Distinguished_NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Full_Domain_NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $SIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Primary_Group_IDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $User_Account_ControlFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Creation_DateFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $MailFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
+    )
+
+    begin {
+
+        $Query = @"
+SELECT * FROM
+(    
+    SELECT TOP $Newest
+        Name0 AS Name,
+        User_Name0 AS User_Name,
+        User_Principal_Name0 AS User_Principal_Name,
+        Distinguished_Name0 AS Distinguished_Name,
+        Full_User_Name0 AS Full_User_Name,
+        Full_Domain_Name0 AS Full_Domain_Name,
+        Windows_NT_Domain0 AS Windows_NT_Domain,
+        SID0 AS SID,
+        Primary_Group_ID0 AS Primary_Group_ID,
+        Unique_User_Name0 AS Unique_User_Name,
+        User_Account_Control0 AS User_Account_Control,
+        ResourceID,
+        ResourceType,
+        CloudUserId,
+        Creation_Date0 AS Creation_Date,
+        Mail0 AS Mail,
+        Network_Operating_System0 AS Network_Operating_System,
+        Object_GUID0 AS Object_GUID
+    FROM
+         v_R_User
+)
+    AS DATA
+"@
+
+        # add in our filter logic
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}
+
+
+function Get-SCCMADGroup {
+<#
+    .SYNOPSIS
+
+        Returns information on Active Directory group enumerated
+        by SCCM agents.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER Newest
+
+        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Detaults to the max value of a 32-bit integer (2147483647).
+
+    .PARAMETER OrderBy
+
+        Order the results by a particular field.
+
+    .PARAMETER Descending
+
+        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
+        the given field in descending order.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause. Form of "Description like '%testlab%'""
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMADGroup
+
+        Runs the query against all current SCCM sessions.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMADGroup -NameFilter "*Domain Controllers*"
+
+        Returns information on groups with 'Domain Controllers' in the name.
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
+        [String]
+        [ValidateSet("Name", "Usergroup_Name", "AD_Domain_Name", "Windows_NT_Domain", "Full_Domain_Name", "Full_User_Name", "Mail", "Name", "Network_Operating_System", "SID", "Unique_Usergroup_Name", "ResourceID", "ResourceType", "Creation_Date", "Group_Type")]
+        $OrderBy,
+
+        [Parameter(ParameterSetName = 'OrderBy')]
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Usergroup_NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $AD_Domain_NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $SIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ResourceIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ResourceTypeFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Creation_DateFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Group_TypeFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
+    )
+
+    begin {
+
+        $Query = @"
+SELECT * FROM
+(    
+    SELECT TOP $Newest
+        Name0 AS Name,
+        Usergroup_Name0 AS Usergroup_Name,
+        AD_Domain_Name0 AS AD_Domain_Name,
+        Windows_NT_Domain0 AS Windows_NT_Domain,
+        SID0 AS SID,
+        Unique_Usergroup_Name0 AS Unique_Usergroup_Name,
+        ResourceID,
+        ResourceType,
+        Creation_Date0 AS Creation_Date,
+        Group_Type0 AS Group_Type,
+        Network_Operating_System0 AS Network_Operating_System,
+        Object_GUID0 AS Object_GUID
+    FROM
+         v_R_UserGroup
+)
+    AS DATA
+"@
+
+        # add in our filter logic
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}
+
+
+function Get-SCCMADGroupMember {
+<#
+    .SYNOPSIS
+
+        Returns information on Active Directory group membership enumerated
+        by SCCM agents.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER Newest
+
+        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Detaults to the max value of a 32-bit integer (2147483647).
+
+    .PARAMETER OrderBy
+
+        Order the results by a particular field.
+
+    .PARAMETER Descending
+
+        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
+        the given field in descending order.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause. Form of "Description like '%testlab%'""
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMADGroup
+
+        Runs the query against all current SCCM sessions.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMADGroup -NameFilter "*Domain Controllers*"
+
+        Returns information on groups with 'Domain Controllers' in the name.
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
+        [String]
+        [ValidateSet("UserName", "GroupName", "UserResourceID")]
+        $OrderBy,
+
+        [Parameter(ParameterSetName = 'OrderBy')]
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $UserNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $GroupNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $UserResourceIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
+    )
+
+    begin {
+
+        $Query = @"
+SELECT * FROM
+(
+    SELECT TOP $Newest
+        G.User_Group_Name0 as GroupName,
+        U.User_Principal_Name0 as UserName,
+        G.ItemKey as UserResourceID
+    FROM
+        User_User_Group_Name_ARR G
+    JOIN 
+        v_R_User U ON G.ItemKey = U.ResourceID
+    WHERE
+        U.User_Principal_Name0 <> ''
+)
+    AS DATA
+"@
+
+        # add in our filter logic
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}

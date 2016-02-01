@@ -134,3 +134,18 @@ Finds launched mimikatz instances by searching the 'FileDescription' and 'Compan
 
 ### Find-SCCMMimikatzFile
 Finds inventoried mimikatz.exe instances by searching the 'FileDescription' field of inventoried .exe's.
+
+
+## SCCM Active Directory Functions
+
+### Get-SCCMADForest
+Returns information on Active Directory forests enumerated by SCCM agents.
+
+### Get-SCCMADUser
+Returns information on Active Directory users enumerated by SCCM agents.
+
+### Get-SCCMADGroup
+Returns information on Active Directory group enumerated by SCCM agents.
+
+### Get-SCCMADGroupMember
+Returns information on Active Directory group membership enumerated by SCCM agents.
