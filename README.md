@@ -52,6 +52,11 @@ Returns SCCM configuration items in an SCCM database.
 ### Set-SCCMConfigurationItem
 Sets a field to a particular value for a SCCM configuration keyed by CI_ID.
 
+### Get-SCCMCollection
+Returns SCCM collections that exist on the primary site server.
+
+### Get-SCCMCollectionMember
+Returns SCCM collection members.
 
 ## Get-SCCM*
 

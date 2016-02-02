@@ -477,19 +477,28 @@ function Get-FilterQuery {
             $Value = $_.Value.Replace('*', '%')
 
             # if we have multiple values to build clauses for
-            if($Value.contains(" or ")){
+            if($Value.Contains(" or ")){
                 $Values = $Value -split " or " | ForEach-Object {$_.trim()}
             }
             else {
                 $Values = @($Value)
             }
 
-            if($Query.EndsWith("AS DATA")) {
-                $Query += "`nWHERE ("
+            if($Query.Contains("AS DATA")) {
+                if($Query.EndsWith("AS DATA")) {
+                    $Query += "`nWHERE ("
+                }
+                else {
+                    $Query += "`nAND ("
+                }
             }
-            else {
+            elseif($Query.Contains("WHERE")) {
                 $Query += "`nAND ("
             }
+            else {
+                $Query += "`nWHERE ("
+            }
+
             $Clauses = @()
 
             ForEach ($Value in $Values) {
@@ -1104,6 +1113,308 @@ SET
 WHERE
     CI_ID LIKE '$CI_ID'
 "@
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}
+
+
+function Get-SCCMCollection {
+<#
+    .SYNOPSIS
+
+        Returns SCCM collections that exist on the primary site server.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER Newest
+
+        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Detaults to the max value of a 32-bit integer (2147483647).
+
+    .PARAMETER OrderBy
+
+        Order the results by a particular field.
+
+    .PARAMETER Descending
+
+        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
+        the given field in descending order.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMPackage
+
+        Runs the query against all current SCCM sessions.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMPackage -Verbose -SourcePathFilter '\\PRIMARY.testlab.local\*'
+
+        Returns packaged with a source location on \\PRIMARY.testlab.local\
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [String]
+        [ValidateSet("CollectionID","SiteID","CollectionName","CollectionComment","IsBuiltIn","MemberCount","Flags","Schedule","LastChangeTime","LastRefreshTime","BeginDate","EvaluationStartTime","LastMemberChangeTime","RefreshType","CollectionType","CurrentStatus","ResultTableName")]
+        $OrderBy,
+
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CollectionIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $SiteIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CollectionNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CollectionCommentFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $IsBuiltInFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $MemberCountFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $FlagsFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ScheduleFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $LastChangeTimeFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $LastRefreshTimeFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $BeginDateFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $EvaluationStartTimeFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $LastMemberChangeTimeFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $RefreshTypeFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CollectionTypeFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CurrentStatusFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ResultTableNameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
+    )
+
+    begin {
+
+        $Query = @"
+SELECT TOP $Newest
+      CollectionID,
+      SiteID,
+      CollectionName,
+      CollectionComment,
+      IsBuiltIn,
+      MemberCount,
+      Flags,
+      Schedule,
+      LastChangeTime,
+      LastRefreshTime,
+      BeginDate,
+      EvaluationStartTime,
+      LastMemberChangeTime,
+      RefreshType,
+      CollectionType,
+      CurrentStatus,
+      ResultTableName
+FROM 
+    vCollections
+"@
+
+        # add in our filter logic
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+    }
+
+    process {   
+        Invoke-SQLQuery -Session $Session -Query $Query
+    }
+}
+
+
+function Get-SCCMCollectionMember {
+<#
+    .SYNOPSIS
+
+        Returns SCCM collection members.
+
+    .PARAMETER Session
+
+        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
+        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+
+    .PARAMETER Newest
+
+        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Detaults to the max value of a 32-bit integer (2147483647).
+
+    .PARAMETER OrderBy
+
+        Order the results by a particular field.
+
+    .PARAMETER Descending
+
+        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
+        the given field in descending order.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause instead of -XFilter options.
+        Form of "ComputerName like '%WINDOWS%' OR Name like '%malicious%'"
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMPackage
+
+        Runs the query against all current SCCM sessions.
+
+    .EXAMPLE
+
+        PS C:\> Get-SCCMSession | Get-SCCMPackage -Verbose -SourcePathFilter '\\PRIMARY.testlab.local\*'
+
+        Returns packaged with a source location on \\PRIMARY.testlab.local\
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [String]
+        [ValidateSet("CollectionID","SiteID","MachineID","ArchitectureKey","Name","Domain","SMSID","SiteCode","IsDirect","IsAssigned","IsClient")]
+        $OrderBy,
+
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $CollectionIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $SiteIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $MachineIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ArchitectureKeyFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $DomainFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $SMSIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $SiteCodeFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $IsDirectFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $IsAssignedFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $IsClientFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
+    )
+
+    begin {
+
+        $Query = @"
+SELECT TOP $Newest
+    CollectionID,
+    SiteID,
+    MachineID,
+    ArchitectureKey,
+    Name,
+    Domain,
+    SMSID,
+    SiteCode,
+    IsDirect,
+    IsAssigned,
+    IsClient
+FROM 
+    vCollectionMembers
+"@
+
+        # add in our filter logic
+        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
     }
 
     process {   

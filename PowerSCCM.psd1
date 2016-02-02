@@ -31,6 +31,8 @@ FunctionsToExport = @(
     'Get-SCCMPackage',
     'Get-SCCMConfigurationItem',
     'Set-SCCMConfigurationItem',
+    'Get-SCCMCollection',
+    'Get-SCCMCollectionMember',
     'Get-SCCMService',
     'Get-SCCMServiceHistory',
     'Get-SCCMAutoStart',
@@ -49,7 +51,11 @@ FunctionsToExport = @(
     'Find-SCCMPostExploitation',
     'Find-SCCMPostExploitationFile',
     'Find-SCCMMimikatz',
-    'Find-SCCMMimikatzFile'
+    'Find-SCCMMimikatzFile',
+    'Get-SCCMADForest',
+    'Get-SCCMADUser',
+    'Get-SCCMADGroup',
+    'Get-SCCMADGroupMember'
 )
 
 # List of all files packaged with this module
