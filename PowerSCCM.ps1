@@ -1,36 +1,36 @@
 #requires -version 2
 
 
-# global store for established SCCM connection objects
-[System.Collections.ArrayList]$Script:SCCMSessions = @()
-$Script:SCCMSessionCounter = 0
+# global store for established Sccm connection objects
+[System.Collections.ArrayList]$Script:SccmSessions = @()
+$Script:SccmSessionCounter = 0
 
 
 # make sure sessions are killed on powershell.exe exit
 $Null = Register-EngineEvent -SourceIdentifier ([Management.Automation.PsEngineEvent]::Exiting) -Action {
-        Write-Warning 'Cleaning up any existing SCCM connections!'
-        Get-SCCMSession | Remove-SCCMSession
+        Write-Warning 'Cleaning up any existing Sccm connections!'
+        Get-SccmSession | Remove-SccmSession
 }
 
 
-function New-SCCMSession {
+function New-SccmSession {
 <#
     .SYNOPSIS
 
-        Initiates a new SCCM database connection, returning a custom PowerSCCM.Session
+        Initiates a new Sccm database connection, returning a custom PowerSccm.Session
         object that stores a unique Id and Name, as well as the ComputerName and 
         DatabaseName used for the connection, and the [System.Data.SQLClient.SQLConnection]
         object used for future queries of the specified database. Also stores the
-        PowerSCCM.Session object in the $Script:SCCMSessions array for later access by
-        Get-SCCMSession.
+        PowerSccm.Session object in the $Script:SccmSessions array for later access by
+        Get-SccmSession.
 
     .PARAMETER ComputerName
 
-        The hostname of the SCCM database server.
+        The hostname of the Sccm database server.
 
     .PARAMETER DatabaseName
 
-        The name of the database on the SCCM server.
+        The name of the database on the Sccm server.
 
     .PARAMETER Credential
 
@@ -46,16 +46,16 @@ function New-SCCMSession {
 
     .EXAMPLE
 
-        PS C:\> New-SCCMSession -ComputerName SCCMServer -DatabaseName CM_LOL
+        PS C:\> New-SccmSession -ComputerName SccmServer -DatabaseName CM_LOL
     
-        Connect to the CM_LOL database on SCCMServer using integrated Windows authentication
+        Connect to the CM_LOL database on SccmServer using integrated Windows authentication
         and store the connection object.
 
     .EXAMPLE
 
-        PS C:\> New-SCCMSession -ComputerName SCCM -DatabaseName CM_LOL -SqlUserName sqladmin -SqlPassword 'Password123!'
+        PS C:\> New-SccmSession -ComputerName Sccm -DatabaseName CM_LOL -SqlUserName sqladmin -SqlPassword 'Password123!'
 
-        Connect to the CM_LOL database on SCCMServer using explicit MSSQL credentials
+        Connect to the CM_LOL database on SccmServer using explicit MSSQL credentials
         and store the connection object.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
@@ -68,93 +68,149 @@ function New-SCCMSession {
         [Parameter(Position = 1, Mandatory = $True)]
         [String]
         [ValidateNotNullOrEmpty()]
-        $DatabaseName,
+        $SiteCode,
 
-        [Parameter(ParameterSetName = 'PSCredential')]
+        [Parameter(Position = 2)]
+        [String]
+        [ValidateSet("Database", "DB", "WMI")]
+        $ConnectionMethod = "WMI",
+
+        [Parameter(Position = 3)]
         [Management.Automation.PSCredential]
         [Management.Automation.CredentialAttribute()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
-        [Parameter(Mandatory=$True, ParameterSetName = 'SQLCredentials')]
+        [Parameter(ParameterSetName = 'SQLCredentials', Mandatory = $True)]
         [String]
         [ValidateNotNullOrEmpty()]
         $SqlUserName,
 
-        [Parameter(Mandatory=$True, ParameterSetName = 'SQLCredentials')]
+        [Parameter(ParameterSetName = 'SQLCredentials', Mandatory = $True)]
         [String]
         [ValidateNotNullOrEmpty()]
         $SqlPassword
     )
 
-    try {
-        $SQLConnection = New-Object System.Data.SQLClient.SQLConnection
+    if($ConnectionMethod -like "WMI") {
 
-        Write-Verbose "Connecting to SCCM server\database $ComputerName\$DatabaseName"
-
-        if($PSBoundParameters['Credential']) {
-            $SqlUserName = $Credential.UserName
-            $SqlPassword = $Credential.GetNetworkCredential().Password
-            Write-Verbose "Connecting using MSSQL credentials: '$SqlUserName : $SqlPassword'"
-            $SQLConnection.ConnectionString ="Server=$ComputerName;Database=$DatabaseName;User Id=$SqlUserName;Password=$SqlPassword;Trusted_Connection=True;"
-            Write-Verbose "Connection string: $($SQLConnection.ConnectionString)"
-        }
-        elseif($PSBoundParameters['SqlUserName']) {
-            Write-Verbose "Connecting using MSSQL credentials: '$SqlUserName : $SqlPassword'"
-            $SQLConnection.ConnectionString ="Server=$ComputerName;Database=$DatabaseName;User Id=$SqlUserName;Password=$SqlPassword;Trusted_Connection=True;"
-            Write-Verbose "Connection string: $($SQLConnection.ConnectionString)"
-        }
-        else {
-            Write-Verbose "Connecting using integrated Windows authentication"
-            $SQLConnection.ConnectionString ="Server=$ComputerName;Database=$DatabaseName;Integrated Security=True;"
-            Write-Verbose "Connection string: $($SQLConnection.ConnectionString)"
-        }
+        # if we're establishing the session via WMI
         
-        $SQLConnection.Open()
+        Write-Verbose "Connecting to Sccm server\site $ComputerName\$SiteCode via WMI"
 
-        $Script:SCCMSessionCounter += 1
+        try {
 
-        $SCCMSessionObject = New-Object PSObject
-        $SCCMSessionObject | Add-Member Noteproperty 'Id' $Script:SCCMSessionCounter
-        $SCCMSessionObject | Add-Member Noteproperty 'Name' $($DatabaseName + $Script:SCCMSessionCounter)
-        $SCCMSessionObject | Add-Member Noteproperty 'ComputerName' $ComputerName
-        $SCCMSessionObject | Add-Member Noteproperty 'DatabaseName' $DatabaseName
-        $SCCMSessionObject | Add-Member Noteproperty 'SCCMVersion' $Null
-        $SCCMSessionObject | Add-Member Noteproperty 'Permissions' $Null
-        $SCCMSessionObject | Add-Member Noteproperty 'SqlConnection' $SQLConnection
-        
-        # add in our custom object type
-        $SCCMSessionObject.PSObject.TypeNames.Add('PowerSCCM.Session')
-        
-        # get the SCCM version used
-        $SCCMVersionQuery = "SELECT TOP 1 LEFT(Client_Version0,CHARINDEX('.',Client_Version0)-1) as SCCM_Version FROM v_R_System"
-        $SCCMVersion = (Invoke-SQLQuery -Session $SCCMSessionObject -Query $SCCMVersionQuery).SCCM_Version
-        $SCCMSessionObject.SCCMVersion = $SCCMVersion
+            $Query = "SELECT * FROM SMS_ProviderLocation where SiteCode = '$SiteCode'"
+            if($Credential) {
+                $SccmProvider = Get-WmiObject -ComputerName $ComputerName -Query $Query -Namespace "root\sms" -Credential $Credential
+            }
+            else {
+                $SccmProvider = Get-WmiObject -ComputerName $ComputerName -Query $Query -Namespace "root\sms"
+            }
 
-        # get the current user database permissions
-        $PermissionsQuery = "SELECT permission_name FROM fn_my_permissions (NULL, 'DATABASE')"
-        $Permissions = Invoke-SQLQuery -Session $SCCMSessionObject -Query $PermissionsQuery | ForEach-Object { $_.permission_name }
-        $SCCMSessionObject.Permissions = $Permissions
+            $Script:SccmSessionCounter += 1
 
-        if(!($Permissions -contains "SELECT")) {
-            Write-Warning "Current user does not have SELECT permissions!"
+            $SccmSessionObject = New-Object PSObject
+            $SccmSessionObject | Add-Member Noteproperty 'Id' $Script:SccmSessionCounter
+            $SccmSessionObject | Add-Member Noteproperty 'Name' $($SiteCode + $Script:SccmSessionCounter)
+            $SccmSessionObject | Add-Member Noteproperty 'ComputerName' $ComputerName
+            $SccmSessionObject | Add-Member Noteproperty 'Credential' $Credential
+            $SccmSessionObject | Add-Member Noteproperty 'SiteCode' $SiteCode
+            $SccmSessionObject | Add-Member Noteproperty 'ConnectionMethod' $ConnectionMethod
+            $SccmSessionObject | Add-Member Noteproperty 'SccmVersion' $Null
+            $SccmSessionObject | Add-Member Noteproperty 'Permissions' @("ALL")
+            $SccmSessionObject | Add-Member Noteproperty 'Provider' $SccmProvider
+            
+            # add in our custom object type
+            $SccmSessionObject.PSObject.TypeNames.Add('PowerSccm.Session')
+
+            $SccmVersion = (Invoke-SccmQuery -Session $SccmSessionObject -Query "SELECT * FROM SMS_R_System" | Select-Object -First 1 -Property ClientVersion).ClientVersion.Split(".")[0]
+            $SccmSessionObject.SccmVersion = $SccmVersion
         }
-        if(!($Permissions -contains "UPDATE")) {
-            Write-Warning "Current user does not have UPDATE permissions!"
+        catch {
+            Write-Error "[!] Error connecting to $ComputerName\$WMISiteCode via WMI : $_"
+        }
+    }
+
+    else {
+        # if we're establishing the session via the SCCM database
+        try {
+
+            $DatabaseName = "CM_$SiteCode"
+            $SQLConnection = New-Object System.Data.SQLClient.SQLConnection
+            
+            Write-Verbose "Connecting to Sccm server\database $ComputerName\$DatabaseName"
+
+            if($PSBoundParameters['Credential']) {
+                $SqlUserName = $Credential.UserName
+                $SqlPassword = $Credential.GetNetworkCredential().Password
+                Write-Verbose "Connecting using MSSQL credentials: '$SqlUserName : $SqlPassword'"
+                $SQLConnection.ConnectionString ="Server=$ComputerName;Database=$DatabaseName;User Id=$SqlUserName;Password=$SqlPassword;Trusted_Connection=True;"
+                Write-Verbose "Connection string: $($SQLConnection.ConnectionString)"
+            }
+            elseif($PSBoundParameters['SqlUserName']) {
+                Write-Verbose "Connecting using MSSQL credentials: '$SqlUserName : $SqlPassword'"
+                $SQLConnection.ConnectionString ="Server=$ComputerName;Database=$DatabaseName;User Id=$SqlUserName;Password=$SqlPassword;Trusted_Connection=True;"
+                Write-Verbose "Connection string: $($SQLConnection.ConnectionString)"
+            }
+            else {
+                Write-Verbose "Connecting using integrated Windows authentication"
+                $SQLConnection.ConnectionString ="Server=$ComputerName;Database=$DatabaseName;Integrated Security=True;"
+                Write-Verbose "Connection string: $($SQLConnection.ConnectionString)"
+            }
+
+            $SQLConnection.Open()
+
+            $Script:SccmSessionCounter += 1
+
+            $SccmSessionObject = New-Object PSObject
+            $SccmSessionObject | Add-Member Noteproperty 'Id' $Script:SccmSessionCounter
+            $SccmSessionObject | Add-Member Noteproperty 'Name' $($SiteCode + $Script:SccmSessionCounter)
+            $SccmSessionObject | Add-Member Noteproperty 'ComputerName' $ComputerName
+            $SccmSessionObject | Add-Member Noteproperty 'Credential' $Null
+            $SccmSessionObject | Add-Member Noteproperty 'SiteCode' $SiteCode
+            $SccmSessionObject | Add-Member Noteproperty 'ConnectionMethod' $ConnectionMethod
+            $SccmSessionObject | Add-Member Noteproperty 'SccmVersion' $Null
+            $SccmSessionObject | Add-Member Noteproperty 'Permissions' $Null
+            # $SccmSessionObject | Add-Member Noteproperty 'SqlConnection' $SQLConnection
+            $SccmSessionObject | Add-Member Noteproperty 'Provider' $SQLConnection
+            
+            # add in our custom object type
+            $SccmSessionObject.PSObject.TypeNames.Add('PowerSccm.Session')
+            
+            # get the Sccm version used
+            $SccmVersionQuery = "SELECT TOP 1 LEFT(Client_Version0,CHARINDEX('.',Client_Version0)-1) as Sccm_Version FROM v_R_System"
+            $SccmVersion = (Invoke-SccmQuery -Session $SccmSessionObject -Query $SccmVersionQuery).Sccm_Version
+            $SccmSessionObject.SccmVersion = $SccmVersion
+
+            # get the current user database permissions
+            $PermissionsQuery = "SELECT permission_name FROM fn_my_permissions (NULL, 'DATABASE')"
+            $Permissions = Invoke-SccmQuery -Session $SccmSessionObject -Query $PermissionsQuery | ForEach-Object { $_.permission_name }
+            $SccmSessionObject.Permissions = $Permissions
+
+            if(!($Permissions -contains "SELECT")) {
+                Write-Warning "Current user does not have SELECT permissions!"
+            }
+            if(!($Permissions -contains "UPDATE")) {
+                Write-Warning "Current user does not have UPDATE permissions!"
+            }
         }
 
+        catch {
+            Write-Error "[!] Error connecting to $ComputerName\$DatabaseName : $_"
+        }
+    }
+    
+    if($SccmSessionObject) {
         # return the new session object to the pipeline        
-        $SCCMSessionObject
+        $SccmSessionObject
 
         # store the session object in the script store
-        $Null = $Script:SCCMSessions.add($SCCMSessionObject)
-    }
-    catch {
-        Write-Error "[!] Error connecting to $ComputerName\$DatabaseName : $_"
+        $Null = $Script:SccmSessions.add($SccmSessionObject)
     }
 }
 
 
-function Get-SCCMSession {
+function Get-SccmSession {
 <#
     .SYNOPSIS
 
@@ -163,57 +219,62 @@ function Get-SCCMSession {
 
     .PARAMETER Id
 
-        The Id of a stored SCCM session object created by New-SCCMSession.
+        The Id of a stored Sccm session object created by New-SccmSession.
 
     .PARAMETER Name
 
-        The Name of a stored SCCM session object created by New-SCCMSession,
+        The Name of a stored Sccm session object created by New-SccmSession,
         wildcards accepted.
 
     .PARAMETER ComputerName
 
-        The ComputerName of a stored SCCM session object created by New-SCCMSession,
+        The ComputerName of a stored Sccm session object created by New-SccmSession,
         wildcards accepted.
 
-    .PARAMETER DatabaseName
+    .PARAMETER SiteCode
 
-        The DatabaseName of a stored SCCM session object created by New-SCCMSession,
+        The SiteCode of a stored Sccm session object created by New-SccmSession,
+        wildcards accepted.
+
+    .PARAMETER ConnectionMethod
+
+        The ConnectionMethod of a stored Sccm session object created by New-SccmSession,
         wildcards accepted.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession
+        PS C:\> Get-SccmSession
 
-        Return all active SCCM database sessions stored.
+        Return all active Sccm database sessions stored.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession -Id 3
+        PS C:\> Get-SccmSession -Id 3
 
         Return the active database sessions stored for Id of 3
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession -Name CM_LOL1
+        PS C:\> Get-SccmSession -Name CM_LOL1
 
         Return named CM_LOL1 active database session
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession -ComputerName SCCMSERVER
+        PS C:\> Get-SccmSession -ComputerName SccmSERVER
 
-        Return the active database sessions stored for the SCCMSERVER machine
+        Return the active database sessions stored for the SccmSERVER machine
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession -DatabaseName CM_LOL
+        PS C:\> Get-SccmSession -DatabaseName CM_LOL
 
         Return the active database sessions stored for CM_LOL.
 #>
     [CmdletBinding()]
     param(
         [Parameter(ValueFromPipelineByPropertyName=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Parameter(ValueFromPipelineByPropertyName=$True)]
@@ -228,123 +289,139 @@ function Get-SCCMSession {
         [Parameter(ValueFromPipelineByPropertyName=$True)]
         [String]
         [ValidateNotNullOrEmpty()]
-        $DatabaseName,
+        $ComputerName,
 
         [Parameter(ValueFromPipelineByPropertyName=$True)]
         [String]
         [ValidateNotNullOrEmpty()]
-        $ComputerName
+        $SiteCode,
+
+        [Parameter(ValueFromPipelineByPropertyName=$True)]
+        [String]
+        [ValidateSet("Database", "DB", "WMI")]
+        $ConnectionMethod
     )
 
     if($PSBoundParameters['Session']) {
         $Session
     }
 
-    elseif($Script:SCCMSessions) {
+    elseif($Script:SccmSessions) {
 
         if($PSBoundParameters['Id']) {
-            $Script:SCCMSessions.Clone() | Where-Object {
+            $Script:SccmSessions.Clone() | Where-Object {
                 $_.Id -eq $Id
             }
         }
 
         elseif($PSBoundParameters['Name']) {
-            $Script:SCCMSessions.Clone() | Where-Object {
+            $Script:SccmSessions.Clone() | Where-Object {
                 $_.Name -like $Name
             }
         }
 
         elseif($PSBoundParameters['ComputerName']) {
-            if($PSBoundParameters['DatabaseName']) {
-                $Script:SCCMSessions.Clone() | Where-Object {
-                    ($_.ComputerName -like $ComputerName) -and ($_.DatabaseName -like $DatabaseName)
+            if($PSBoundParameters['SiteCode']) {
+                $Script:SccmSessions.Clone() | Where-Object {
+                    ($_.ComputerName -like $ComputerName) -and ($_.SiteCode -like $SiteCode)
                 }
             }
             else {
-                $Script:SCCMSessions.Clone() | Where-Object {
+                $Script:SccmSessions.Clone() | Where-Object {
                     $_.ComputerName -like $ComputerName
                 }
             }
         }
 
-        elseif($PSBoundParameters['DatabaseName']) {
-            $Script:SCCMSessions.Clone() | Where-Object {
-                $_.DatabaseName -like $DatabaseName
+        elseif($PSBoundParameters['SiteCode']) {
+            $Script:SccmSessions.Clone() | Where-Object {
+                $_.SiteCode -like $SiteCode
+            }
+        }
+
+        elseif($PSBoundParameters['ConnectionMethod']) {
+            $Script:SccmSessions.Clone() | Where-Object {
+                $_.ConnectionMethod -like $ConnectionMethod
             }
         }
 
         else {
-            $Script:SCCMSessions.Clone()
+            $Script:SccmSessions.Clone()
         }
     }
 }
 
 
-function Remove-SCCMSession {
+function Remove-SccmSession {
 <#
     .SYNOPSIS
 
-        Closes and destroys a SCCM database connection object either passed
+        Closes and destroys a Sccm database connection object either passed
         on the pipeline or specified by -DatabaseName.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object generated and stored by New-SCCMSession,
+        The custom PowerSccm.Session object generated and stored by New-SccmSession,
         passable on the pipeline.
 
     .PARAMETER Id
 
-        The Id of a stored SCCM session object created by New-SCCMSession.
+        The Id of a stored Sccm session object created by New-SccmSession.
 
     .PARAMETER Name
 
-        The Name of a stored SCCM session object created by New-SCCMSession,
+        The Name of a stored Sccm session object created by New-SccmSession,
         wildcards accepted.
 
     .PARAMETER ComputerName
 
-        The ComputerName of a stored SCCM session object created by New-SCCMSession,
+        The ComputerName of a stored Sccm session object created by New-SccmSession,
         wildcards accepted.
 
-    .PARAMETER DatabaseName
+    .PARAMETER SiteCode
 
-        The DatabaseName of a stored SCCM session object created by New-SCCMSession,
+        The SiteCode of a stored Sccm session object created by New-SccmSession,
+        wildcards accepted.
+
+    .PARAMETER ConnectionMethod
+
+        The ConnectionMethod of a stored Sccm session object created by New-SccmSession,
         wildcards accepted.
 
     .EXAMPLE
 
-        PS C:\> Remove-SCCMSession -Id 3
+        PS C:\> Remove-SccmSession -Id 3
 
         Destroy/remove the active database sessions stored for Id of 3
 
     .EXAMPLE
 
-        PS C:\> Remove-SCCMSession -Name CM_LOL1
+        PS C:\> Remove-SccmSession -Name CM_LOL1
 
         Destroy/remove the named CM_LOL1 active database session
 
     .EXAMPLE
 
-        PS C:\> Remove-SCCMSession -ComputerName SCCMSERVER
+        PS C:\> Remove-SccmSession -ComputerName SccmSERVER
 
-        Destroy/remove the active database sessions stored for the SCCMSERVER machine
+        Destroy/remove the active database sessions stored for the SccmSERVER machine
 
     .EXAMPLE
 
-        PS C:\> Remove-SCCMSession -DatabaseName CM_LOL
+        PS C:\> Remove-SccmSession -DatabaseName CM_LOL
 
         Destroy/remove the active database sessions stored for CM_LOL.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession -Name CM_LOL1 | Remove-SCCMSession
+        PS C:\> Get-SccmSession -Name CM_LOL1 | Remove-SccmSession
 
         Close/destroy the active database session stored for the CM_LOL1 named session.
 #>
     [CmdletBinding()]
     param(
         [Parameter(ValueFromPipelineByPropertyName=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Parameter(ValueFromPipelineByPropertyName=$True)]
@@ -359,44 +436,51 @@ function Remove-SCCMSession {
         [Parameter(ValueFromPipelineByPropertyName=$True)]
         [String]
         [ValidateNotNullOrEmpty()]
-        $DatabaseName,
+        $ComputerName,
 
         [Parameter(ValueFromPipelineByPropertyName=$True)]
         [String]
         [ValidateNotNullOrEmpty()]
-        $ComputerName
+        $SiteCode,
+
+        [Parameter(ValueFromPipelineByPropertyName=$True)]
+        [String]
+        [ValidateSet("Database", "DB", "WMI")]
+        $ConnectionMethod
     )
 
     process {
-        Get-SCCMSession @PSBoundParameters | ForEach-Object {
+        Get-SccmSession @PSBoundParameters | ForEach-Object {
             Write-Verbose "Removing session '$($_.Name)'"
-            $_.SqlConnection.Close()
-            $Script:SCCMSessions.Remove($_)
+            if($_.ConnectionMethod -NotLike "WMI") {
+                $_.SqlConnection.Close()
+            }
+            $Script:SccmSessions.Remove($_)
         }
     }
 }
 
 
-function Invoke-SQLQuery {
+function Invoke-SccmQuery {
 <#
     .SYNOPSIS
 
-        Helper that executes a given SCCM SQL query on the passed, specified, or
-        current (default) SCCM database session connection.
+        Helper that executes a given Sccm SQL or WMI query on the passed Sccm 
+        session object.
         Should not normally be called by the user.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object returned by Get-SCCMSession, passable on the pipeline.
+        The custom PowerSccm.Session object returned by Get-SccmSession, passable on the pipeline.
 
     .PARAMETER Query
 
-        The SCCM SQL query to run.
+        The Sccm SQL or WMI query to run.
 #>
     [CmdletBinding()]
     param(
         [Parameter(Position = 0, Mandatory = $True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Parameter(Position = 1, Mandatory = $True)]
@@ -406,26 +490,41 @@ function Invoke-SQLQuery {
 
     process {
 
-        if($Query.Trim().StartsWith("-- MIN_SCCM_VERSION")) {
+        if($Query.Trim().StartsWith("-- MIN_Sccm_VERSION")) {
             # if the query specifies a minimum version, make sure this connection complies
             $FirstLine = $($Query -Split "\n")[0]
             $MinVersion = ($FirstLine -Split "=")[1].trim()
 
             if($MinVersion) {
-                if($MinVersion -gt $($Session.SCCMVersion)) {
-                    Throw "Query requires a minimum SCCM version ($MinVersion) higher than the current connection ($($Session.SCCMVersion))!"
+                if($MinVersion -gt $($Session.SccmVersion)) {
+                    Throw "Query requires a minimum Sccm version ($MinVersion) higher than the current connection ($($Session.SccmVersion))!"
                 }
             }
         }
 
-        Write-Verbose "Running query on session $($Session.Name): $Query"
+        if($Session.ConnectionMethod -Like "WMI") {
 
-        $SqlAdapter = New-Object System.Data.SqlClient.SqlDataAdapter($Query, $Session.SqlConnection)
+            Write-Verbose "Running WMI query on session $($Session.Name): $Query"
+            $Namespace = $($Session.Provider.NamespacePath -split "\\", 4)[3]
 
-        $Table = New-Object System.Data.DataSet
-        $Null = $SqlAdapter.Fill($Table)
+            if($Session.Credential) {
+                Get-WmiObject -ComputerName $Session.ComputerName -Namespace $Namespace -Query $Query -Credential $Session.Credential
+            }
+            else {
+                Get-WmiObject -ComputerName $Session.ComputerName -Namespace $Namespace -Query $Query
+            }
+        }
+        else {
 
-        $Table.Tables[0]
+            Write-Verbose "Running database SQL query on session $($Session.Name): $Query"
+
+            $SqlAdapter = New-Object System.Data.SqlClient.SqlDataAdapter($Query, $Session.Provider)
+
+            $Table = New-Object System.Data.DataSet
+            $Null = $SqlAdapter.Fill($Table)
+
+            $Table.Tables[0]
+        }
     }
 }
 
@@ -435,7 +534,7 @@ function Get-FilterQuery {
     .SYNOPSIS
 
         Helper that takes a -Query string and a set of PSBoundParameters
-        and returns the appropriate final query string for a Get-SCCM*
+        and returns the appropriate final query string for a Get-Sccm*
         function based on the given filter options.
 
     .PARAMETER Query
@@ -554,22 +653,21 @@ function Get-FilterQuery {
 ##############################################
 #
 # Functions that query or modified information
-# in the SCCM database/server itself (as opposed) to
-# client information in the SCCM database).
+# in the Sccm database/server itself (as opposed) to
+# client information in the Sccm database).
 #
 ##############################################
 
 
-function Find-SCCMDatabase {
+function Find-SccmSiteName {
 <#
     .SYNOPSIS
 
-        Takes a given SCCM database service identified by -ComputerName
-        and returns all current database names.
+        Takes a given Sccm server and returns available site names.
 
     .PARAMETER ComputerName
 
-        The name key of an SCCM database to create a temporary connection to for
+        The name key of an Sccm database to create a temporary connection to for
         the query.
 
     .PARAMETER Credential
@@ -586,41 +684,92 @@ function Find-SCCMDatabase {
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
-        [Parameter(Position = 0, Mandatory=$True, ValueFromPipeline=$True)]
+        [Parameter(Position = 0, Mandatory = $True)]
         [String]
         [ValidateNotNullOrEmpty()]
         $ComputerName,
 
-        [Parameter(ParameterSetName = 'PSCredential')]
+        [Parameter(Position = 2)]
+        [String]
+        [ValidateSet("Database", "DB", "WMI")]
+        $ConnectionMethod = "WMI",
+
+        [Parameter(Position = 3)]
         [Management.Automation.PSCredential]
         [Management.Automation.CredentialAttribute()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
-        [Parameter(Position = 1, Mandatory=$True, ParameterSetName = 'SQLCredentials')]
+        [Parameter(ParameterSetName = 'SQLCredentials', Mandatory = $True)]
         [String]
         [ValidateNotNullOrEmpty()]
         $SqlUserName,
 
-        [Parameter(Position = 2, Mandatory=$True, ParameterSetName = 'SQLCredentials')]
+        [Parameter(ParameterSetName = 'SQLCredentials', Mandatory = $True)]
         [String]
         [ValidateNotNullOrEmpty()]
         $SqlPassword
     )
 
     process {
-        try {
-            $Session = New-SCCMSession -DatabaseName 'master' @PSBoundParameters
-            $Session | Invoke-SQLQuery -Query "SELECT name FROM Sys.Databases WHERE name LIKE 'CM_%' AND state_desc = 'ONLINE'"
-            $Session | Remove-SCCMSession
+        if($ConnectionMethod -like "WMI") {
+
+            $Query = "SELECT * FROM SMS_ProviderLocation where ProviderForLocalSite = true"
+
+            if($Session.Credential) {
+                Get-WmiObject -ComputerName $ComputerName -Namespace "root\sms" -Query $Query -Credential $Session.Credential | ForEach-Object {$_.SiteCode}
+            }
+            else {
+                Get-WmiObject -ComputerName $ComputerName -Namespace "root\sms" -Query $Query | ForEach-Object {$_.SiteCode}
+            }
         }
-        catch {
-            Write-Error "Error enumerating server '$ComputerName' : $_"
+        else {
+            try {
+                # ...yes I know this is duplicate logic MATT :)
+                #   this seemed to be the easiest way to preserve the functionality
+                #   of New-SccmSession without major modification
+                $SQLConnection = New-Object System.Data.SQLClient.SQLConnection
+                
+                if($PSBoundParameters['Credential']) {
+                    $SqlUserName = $Credential.UserName
+                    $SqlPassword = $Credential.GetNetworkCredential().Password
+                    Write-Verbose "Connecting using MSSQL credentials: '$SqlUserName : $SqlPassword'"
+                    $SQLConnection.ConnectionString ="Server=$ComputerName;Database=$DatabaseName;User Id=$SqlUserName;Password=$SqlPassword;Trusted_Connection=True;"
+                    Write-Verbose "Connection string: $($SQLConnection.ConnectionString)"
+                }
+                elseif($PSBoundParameters['SqlUserName']) {
+                    Write-Verbose "Connecting using MSSQL credentials: '$SqlUserName : $SqlPassword'"
+                    $SQLConnection.ConnectionString ="Server=$ComputerName;Database=$DatabaseName;User Id=$SqlUserName;Password=$SqlPassword;Trusted_Connection=True;"
+                    Write-Verbose "Connection string: $($SQLConnection.ConnectionString)"
+                }
+                else {
+                    Write-Verbose "Connecting using integrated Windows authentication"
+                    $SQLConnection.ConnectionString ="Server=$ComputerName;Database=$DatabaseName;Integrated Security=True;"
+                    Write-Verbose "Connection string: $($SQLConnection.ConnectionString)"
+                }
+
+                $SQLConnection.Open()
+
+                $Query = "SELECT name FROM Sys.Databases WHERE name LIKE 'CM_%' AND state_desc = 'ONLINE'"
+                $SqlAdapter = New-Object System.Data.SqlClient.SqlDataAdapter($Query, $SQLConnection)
+
+                $Table = New-Object System.Data.DataSet
+                $Null = $SqlAdapter.Fill($Table)
+
+                $Table.Tables[0] | ForEach-Object {
+                    $($_[0] -split "_")[1]
+                }
+
+                $SQLConnection.Close()
+            }
+            catch {
+                Write-Error "Error enumerating SQL database on server '$ComputerName' : $_"
+            }
         }
     }
 }
 
 
-function Get-SCCMApplicationCI {
+function Get-SccmApplicationCI {
 <#
     .SYNOPSIS
 
@@ -628,12 +777,12 @@ function Get-SCCMApplicationCI {
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -697,20 +846,20 @@ function Get-SCCMApplicationCI {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMApplicationCI
+        PS C:\> Get-SccmSession | Get-SccmApplicationCI
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMApplicationCI -IsHiddenFilter 1
+        PS C:\> Get-SccmSession | Get-SccmApplicationCI -IsHiddenFilter 1
 
         Finds all hidden user deployed application configuration items.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -802,25 +951,25 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMPackage {
+function Get-SccmPackage {
 <#
     .SYNOPSIS
 
-        Returns SCCM packages that exist on the primary site server.
+        Returns Sccm packages that exist on the primary site server.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -864,20 +1013,20 @@ function Get-SCCMPackage {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMPackage
+        PS C:\> Get-SccmSession | Get-SccmPackage
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMPackage -Verbose -SourcePathFilter '\\PRIMARY.testlab.local\*'
+        PS C:\> Get-SccmSession | Get-SccmPackage -Verbose -SourcePathFilter '\\PRIMARY.testlab.local\*'
 
         Returns packaged with a source location on \\PRIMARY.testlab.local\
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -939,21 +1088,21 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMConfigurationItem {
+function Get-SccmConfigurationItem {
 <#
     .SYNOPSIS
 
-        Returns SCCM configuration items that exist on the primary site server.
+        Returns Sccm configuration items that exist on the primary site server.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Filter
 
@@ -962,20 +1111,20 @@ function Get-SCCMConfigurationItem {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMConfigurationItem -CI_IDFilter 12345
+        PS C:\> Get-SccmSession | Get-SccmConfigurationItem -CI_IDFilter 12345
 
         Returns the configuration item with ID 12345
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMConfigurationItem -IsHiddenFilter 1 -IsUserDefinedFilter 1
+        PS C:\> Get-SccmSession | Get-SccmConfigurationItem -IsHiddenFilter 1 -IsUserDefinedFilter 1
 
         Returns the all user defined configuration items that are marked as hidden.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -1041,26 +1190,26 @@ WHERE
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Set-SCCMConfigurationItem {
+function Set-SccmConfigurationItem {
 <#
     .SYNOPSIS
 
-        Sets a field to a particular value for a SCCM configuration keyed by CI_ID.
+        Sets a field to a particular value for a Sccm configuration keyed by CI_ID.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER CI_ID
 
         The configuration interface ID of the application to manipulate.
-        You can retrieve this with Get-SCCMApplication or Get-SCCMConfigurationItem.
+        You can retrieve this with Get-SccmApplication or Get-SccmConfigurationItem.
 
     .PARAMETER Column
 
@@ -1072,14 +1221,14 @@ function Set-SCCMConfigurationItem {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Set-SCCMConfigurationItem -CI_ID 12345 -Field IsHidden -Value 1
+        PS C:\> Get-SccmSession | Set-SccmConfigurationItem -CI_ID 12345 -Field IsHidden -Value 1
 
-        Set the configuration item with If 12345 to be hidden from the SCCM GUi.
+        Set the configuration item with If 12345 to be hidden from the Sccm GUi.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Parameter(Mandatory=$True)]
@@ -1116,25 +1265,25 @@ WHERE
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMCollection {
+function Get-SccmCollection {
 <#
     .SYNOPSIS
 
-        Returns SCCM collections that exist on the primary site server.
+        Returns Sccm collections that exist on the primary site server.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -1153,20 +1302,20 @@ function Get-SCCMCollection {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMPackage
+        PS C:\> Get-SccmSession | Get-SccmPackage
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMPackage -Verbose -SourcePathFilter '\\PRIMARY.testlab.local\*'
+        PS C:\> Get-SccmSession | Get-SccmPackage -Verbose -SourcePathFilter '\\PRIMARY.testlab.local\*'
 
         Returns packaged with a source location on \\PRIMARY.testlab.local\
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -1282,25 +1431,25 @@ FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMCollectionMember {
+function Get-SccmCollectionMember {
 <#
     .SYNOPSIS
 
-        Returns SCCM collection members.
+        Returns Sccm collection members.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -1319,20 +1468,20 @@ function Get-SCCMCollectionMember {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMPackage
+        PS C:\> Get-SccmSession | Get-SccmPackage
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMPackage -Verbose -SourcePathFilter '\\PRIMARY.testlab.local\*'
+        PS C:\> Get-SccmSession | Get-SccmPackage -Verbose -SourcePathFilter '\\PRIMARY.testlab.local\*'
 
         Returns packaged with a source location on \\PRIMARY.testlab.local\
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -1418,7 +1567,7 @@ FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
@@ -1430,21 +1579,21 @@ FROM
 #
 ##############################################
 
-function Get-SCCMService {
+function Get-SccmService {
 <#
     .SYNOPSIS
 
         Returns information on the current set of running services as of the
-        last SCCM agent query/checkin.
+        last Sccm agent query/checkin.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -1461,10 +1610,10 @@ function Get-SCCMService {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER SCCMTimeStampFilter
+    .PARAMETER SccmTimeStampFilter
 
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
+        Query only for results where the Sccm TimeStamp field matches the given filter.
+        <> operators accepted (e.g. -SccmTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER DescriptionFilter
 
@@ -1493,34 +1642,34 @@ function Get-SCCMService {
 
     .EXAMPLE
 
-        PS C:\> $Session = Get-SCCMSession
-        PS C:\> Get-SCCMService -Session $Session
+        PS C:\> $Session = Get-SccmSession
+        PS C:\> Get-SccmService -Session $Session
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMService -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmService -ComputerFilterName WINDOWS1
 
         Returns service information just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMService -ComputerFilterName WINDOWS* -Newest 10 -OrderBy DisplayName -Descending
+        PS C:\> Get-SccmSession | Get-SccmService -ComputerFilterName WINDOWS* -Newest 10 -OrderBy DisplayName -Descending
 
         Return the top 10 services for system matching the computer name WINDOWS*, ordered by
         descending DisplayName
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMService -PathNameFilter "C:\Temp\* or C:\Malicious\*"
+        PS C:\> Get-SccmSession | Get-SccmService -PathNameFilter "C:\Temp\* or C:\Malicious\*"
 
         Returns services with a path name starting with C:\Temp\ or C:\Malicious\
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -1528,7 +1677,7 @@ function Get-SCCMService {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("SCCMTimeStamp", "Caption","Description","DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ProcessId", "ServiceType", "Started", "StartMode", "State")]
+        [ValidateSet("SccmTimeStamp", "Caption","Description","DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ProcessId", "ServiceType", "Started", "StartMode", "State")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -1541,7 +1690,7 @@ function Get-SCCMService {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $SCCMTimeStampFilter,
+        $SccmTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -1573,7 +1722,7 @@ SELECT * FROM
          COMPUTER.ResourceID as ResourceID,
          COMPUTER.Name0 as ComputerName,
          ADAPTER.IPAddress0 as IPAddress,
-         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.TimeStamp as SccmTimeStamp,
          QUERY.Caption0 as Caption,
          QUERY.Description0 as Description,
          QUERY.DisplayName0 as DisplayName,
@@ -1603,26 +1752,26 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMServiceHistory {
+function Get-SccmServiceHistory {
 <#
     .SYNOPSIS
 
         Returns information on the historical set of running services as of the
-        last SCCM agent query/checkin.
+        last Sccm agent query/checkin.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -1639,10 +1788,10 @@ function Get-SCCMServiceHistory {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER SCCMTimeStampFilter
+    .PARAMETER SccmTimeStampFilter
 
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
+        Query only for results where the Sccm TimeStamp field matches the given filter.
+        <> operators accepted (e.g. -SccmTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER DescriptionFilter
 
@@ -1671,19 +1820,19 @@ function Get-SCCMServiceHistory {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMServiceHistory
+        PS C:\> Get-SccmSession | Get-SccmServiceHistory
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMServiceHistory -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmServiceHistory -ComputerFilterName WINDOWS1
 
         Returns historical service information just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMServiceHistory -ComputerFilterName WINDOWS* -Newest 10 -OrderBy DisplayName -Descending
+        PS C:\> Get-SccmSession | Get-SccmServiceHistory -ComputerFilterName WINDOWS* -Newest 10 -OrderBy DisplayName -Descending
 
         Return the top 10 historical services for system matching the computer name WINDOWS*, ordered by
         descending DisplayName
@@ -1691,7 +1840,7 @@ function Get-SCCMServiceHistory {
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -1699,7 +1848,7 @@ function Get-SCCMServiceHistory {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("SCCMTimestamp", "Caption","Description","DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ProcessId", "ServiceType", "Started", "StartMode", "State")]
+        [ValidateSet("SccmTimestamp", "Caption","Description","DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ProcessId", "ServiceType", "Started", "StartMode", "State")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -1712,7 +1861,7 @@ function Get-SCCMServiceHistory {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $SCCMTimeStampFilter,
+        $SccmTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -1744,7 +1893,7 @@ SELECT * FROM
          COMPUTER.ResourceID as ResourceID,
          COMPUTER.Name0 as ComputerName,
          ADAPTER.IPAddress0 as IPAddress,
-         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.TimeStamp as SccmTimeStamp,
          QUERY.Caption0 as Caption,
          QUERY.Description0 as Description,
          QUERY.DisplayName0 as DisplayName,
@@ -1774,26 +1923,26 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMAutoStart {
+function Get-SccmAutoStart {
 <#
     .SYNOPSIS
 
         Returns information on the set of autostart programs as of the
-        last SCCM agent query/checkin.
+        last Sccm agent query/checkin.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -1810,10 +1959,10 @@ function Get-SCCMAutoStart {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER SCCMTimeStampFilter
+    .PARAMETER SccmTimeStampFilter
 
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
+        Query only for results where the Sccm TimeStamp field matches the given filter.
+        <> operators accepted (e.g. -SccmTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER DescriptionFilter
 
@@ -1852,26 +2001,26 @@ function Get-SCCMAutoStart {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMAutoStart
+        PS C:\> Get-SccmSession | Get-SccmAutoStart
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMAutoStart -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmAutoStart -ComputerFilterName WINDOWS1
 
         Returns autostate information just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMAutoStart -DescriptionFilter *malicious*
+        PS C:\> Get-SccmSession | Get-SccmAutoStart -DescriptionFilter *malicious*
 
         Returns autostate information for entries with *malicious* in the description.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -1879,7 +2028,7 @@ function Get-SCCMAutoStart {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("SCCMTimestamp", "Description", "FileName", "FileVersion", "Location", "Product", "Publisher", "StartupType", "StartupValue")]
+        [ValidateSet("SccmTimestamp", "Description", "FileName", "FileVersion", "Location", "Product", "Publisher", "StartupType", "StartupValue")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -1892,7 +2041,7 @@ function Get-SCCMAutoStart {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $SCCMTimeStampFilter,
+        $SccmTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -1932,7 +2081,7 @@ SELECT * FROM
          COMPUTER.ResourceID as ResourceID,
          COMPUTER.Name0 as ComputerName,
          ADAPTER.IPAddress0 as IPAddress,
-         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.TimeStamp as SccmTimeStamp,
          QUERY.Description0 as Description,
          QUERY.FileName0 as FileName,
          QUERY.FileVersion0 as FileVersion,
@@ -1958,26 +2107,26 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMProcess {
+function Get-SccmProcess {
 <#
     .SYNOPSIS
 
         Returns information on the set of currently running processes as of the
-        last SCCM agent query/checkin.
+        last Sccm agent query/checkin.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -1994,10 +2143,10 @@ function Get-SCCMProcess {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER SCCMTimeStampFilter
+    .PARAMETER SccmTimeStampFilter
 
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
+        Query only for results where the Sccm TimeStamp field matches the given filter.
+        <> operators accepted (e.g. -SccmTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER CaptionFilter
         
@@ -2039,26 +2188,26 @@ function Get-SCCMProcess {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMProcess
+        PS C:\> Get-SccmSession | Get-SccmProcess
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMProcess -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmProcess -ComputerFilterName WINDOWS1
 
         Returns process information just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMProcess -NameFilter *malicious*
+        PS C:\> Get-SccmSession | Get-SccmProcess -NameFilter *malicious*
 
         Returns process information for any process with *malicious* in the name.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -2066,7 +2215,7 @@ function Get-SCCMProcess {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("SCCMTimestamp", "Caption", "CreationDate", "Description", "ExecutablePath", "Name", "ParentProcessId", "ProcessId")]
+        [ValidateSet("SccmTimestamp", "Caption", "CreationDate", "Description", "ExecutablePath", "Name", "ParentProcessId", "ProcessId")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -2079,7 +2228,7 @@ function Get-SCCMProcess {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $SCCMTimeStampFilter,
+        $SccmTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -2123,7 +2272,7 @@ SELECT * FROM
          COMPUTER.ResourceID as ResourceID,
          COMPUTER.Name0 as ComputerName,
          ADAPTER.IPAddress0 as IPAddress,
-         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.TimeStamp as SccmTimeStamp,
          QUERY.Caption0 as Caption,
          QUERY.CreationDate0 as CreationDate,
          QUERY.Description0 as Description,
@@ -2148,26 +2297,26 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMProcessHistory {
+function Get-SccmProcessHistory {
 <#
     .SYNOPSIS
 
         Returns information on the historical set of running processes as of the
-        last SCCM agent query/checkin.
+        last Sccm agent query/checkin.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -2184,10 +2333,10 @@ function Get-SCCMProcessHistory {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER SCCMTimeStampFilter
+    .PARAMETER SccmTimeStampFilter
 
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
+        Query only for results where the Sccm TimeStamp field matches the given filter.
+        <> operators accepted (e.g. -SccmTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER CaptionFilter
         
@@ -2229,26 +2378,26 @@ function Get-SCCMProcessHistory {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMProcessHistory
+        PS C:\> Get-SccmSession | Get-SccmProcessHistory
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMProcessHistory -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmProcessHistory -ComputerFilterName WINDOWS1
 
         Returns historical process information just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMProcessHistory -NameFilter *malicious*
+        PS C:\> Get-SccmSession | Get-SccmProcessHistory -NameFilter *malicious*
 
         Returns historical process information for any process with *malicious* in the name.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -2256,7 +2405,7 @@ function Get-SCCMProcessHistory {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("SCCMTimestamp", "Caption", "CreationDate", "Description", "ExecutablePath", "Name", "ParentProcessId", "ProcessId")]
+        [ValidateSet("SccmTimestamp", "Caption", "CreationDate", "Description", "ExecutablePath", "Name", "ParentProcessId", "ProcessId")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -2269,7 +2418,7 @@ function Get-SCCMProcessHistory {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $SCCMTimeStampFilter,
+        $SccmTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -2313,7 +2462,7 @@ SELECT * FROM
          COMPUTER.ResourceID as ResourceID,
          COMPUTER.Name0 as ComputerName,
          ADAPTER.IPAddress0 as IPAddress,
-         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.TimeStamp as SccmTimeStamp,
          QUERY.Caption0 as Caption,
          QUERY.CreationDate0 as CreationDate,
          QUERY.Description0 as Description,
@@ -2338,26 +2487,26 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMRecentlyUsedApplication {
+function Get-SccmRecentlyUsedApplication {
 <#
     .SYNOPSIS
 
         Returns information on the set of recently used applications as of the
-        last SCCM agent query/checkin.
+        last Sccm agent query/checkin.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -2374,10 +2523,10 @@ function Get-SCCMRecentlyUsedApplication {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER SCCMTimeStampFilter
+    .PARAMETER SccmTimeStampFilter
 
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
+        Query only for results where the Sccm TimeStamp field matches the given filter.
+        <> operators accepted (e.g. -SccmTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER CompanyNameFilter
 
@@ -2441,26 +2590,26 @@ function Get-SCCMRecentlyUsedApplication {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMRecentlyUsedApplication
+        PS C:\> Get-SccmSession | Get-SccmRecentlyUsedApplication
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMRecentlyUsedApplication -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmRecentlyUsedApplication -ComputerFilterName WINDOWS1
 
         Returns recently used applications just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMRecentlyUsedApplication -FileDescriptionFilter *mimikatz*
+        PS C:\> Get-SccmSession | Get-SccmRecentlyUsedApplication -FileDescriptionFilter *mimikatz*
 
         Returns recently used applications with *mimikatz* in the description.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -2468,7 +2617,7 @@ function Get-SCCMRecentlyUsedApplication {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("SCCMTimestamp", "CompanyName", "ExplorerFileName", "FileDescription", "FileSize", "FileVersion", "FolderPath", "LastUsedTime", "LastUserName", "OriginalFileName", "ProductName", "ProductVersion")]
+        [ValidateSet("SccmTimestamp", "CompanyName", "ExplorerFileName", "FileDescription", "FileSize", "FileVersion", "FolderPath", "LastUsedTime", "LastUserName", "OriginalFileName", "ProductName", "ProductVersion")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -2481,7 +2630,7 @@ function Get-SCCMRecentlyUsedApplication {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $SCCMTimeStampFilter,
+        $SccmTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -2541,7 +2690,7 @@ SELECT * FROM
          COMPUTER.ResourceID as ResourceID,
          COMPUTER.Name0 as ComputerName,
          ADAPTER.IPAddress0 as IPAddress,
-         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.TimeStamp as SccmTimeStamp,
          QUERY.CompanyName0 as CompanyName,
          QUERY.ExplorerFileName0 as ExplorerFileName,
          QUERY.FileDescription0 as FileDescription,
@@ -2570,26 +2719,26 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMDriver {
+function Get-SccmDriver {
 <#
     .SYNOPSIS
 
         Returns information on the set of currently loaded system drivers as of the
-        last SCCM agent query/checkin.
+        last Sccm agent query/checkin.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -2606,10 +2755,10 @@ function Get-SCCMDriver {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER SCCMTimeStampFilter
+    .PARAMETER SccmTimeStampFilter
 
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
+        Query only for results where the Sccm TimeStamp field matches the given filter.
+        <> operators accepted (e.g. -SccmTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER CaptionFilter
 
@@ -2653,26 +2802,26 @@ function Get-SCCMDriver {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMDriver
+        PS C:\> Get-SccmSession | Get-SccmDriver
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMDriver -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmDriver -ComputerFilterName WINDOWS1
 
         Returns driver information just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMDriver -PathNameFilter C:\Temp\*
+        PS C:\> Get-SccmSession | Get-SccmDriver -PathNameFilter C:\Temp\*
 
         Returns information on all drivers located in C:\Temp\
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -2680,7 +2829,7 @@ function Get-SCCMDriver {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("SCCMTimestamp", "Caption", "Description", "DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ServiceType", "StartMode", "State")]
+        [ValidateSet("SccmTimestamp", "Caption", "Description", "DisplayName", "ErrorControl", "ExitCode", "Name", "PathName", "ServiceType", "StartMode", "State")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -2693,7 +2842,7 @@ function Get-SCCMDriver {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $SCCMTimeStampFilter,
+        $SccmTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -2737,7 +2886,7 @@ SELECT * FROM
          COMPUTER.ResourceID as ResourceID,
          COMPUTER.Name0 as ComputerName,
          ADAPTER.IPAddress0 as IPAddress,
-         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.TimeStamp as SccmTimeStamp,
          QUERY.Caption0 as Caption,
          QUERY.Description0 as Description,
          QUERY.DisplayName0 as DisplayName,
@@ -2765,26 +2914,26 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMConsoleUsage {
+function Get-SccmConsoleUsage {
 <#
     .SYNOPSIS
 
         Returns historical information on user console usage as of the
-        last SCCM agent query/checkin.
+        last Sccm agent query/checkin.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -2801,10 +2950,10 @@ function Get-SCCMConsoleUsage {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER SCCMTimeStampFilter
+    .PARAMETER SccmTimeStampFilter
 
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
+        Query only for results where the Sccm TimeStamp field matches the given filter.
+        <> operators accepted (e.g. -SccmTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER SystemConsoleUserFilter
 
@@ -2833,26 +2982,26 @@ function Get-SCCMConsoleUsage {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMConsoleUsage
+        PS C:\> Get-SccmSession | Get-SccmConsoleUsage
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMConsoleUsage -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmConsoleUsage -ComputerFilterName WINDOWS1
 
         Returns console usage information just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMConsoleUsage -SystemConsoleUserFilter DOMAIN\john
+        PS C:\> Get-SccmSession | Get-SccmConsoleUsage -SystemConsoleUserFilter DOMAIN\john
 
         Returns console usage information for the user 'DOMAIN\john' from all inventoried machines.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -2860,7 +3009,7 @@ function Get-SCCMConsoleUsage {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("SCCMTimestamp", "SystemConsoleUser", "LastConsoleUse", "NumberOfConsoleLogons", "TotalUserConsoleMinutes")]
+        [ValidateSet("SccmTimestamp", "SystemConsoleUser", "LastConsoleUse", "NumberOfConsoleLogons", "TotalUserConsoleMinutes")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -2873,7 +3022,7 @@ function Get-SCCMConsoleUsage {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $SCCMTimeStampFilter,
+        $SccmTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -2905,7 +3054,7 @@ SELECT * FROM
          COMPUTER.ResourceID as ResourceID,
          COMPUTER.Name0 as ComputerName,
          ADAPTER.IPAddress0 as IPAddress,
-         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.TimeStamp as SccmTimeStamp,
          QUERY.SystemConsoleUser0 as SystemConsoleUser,
          QUERY.LastConsoleUse0 as LastConsoleUse,
          QUERY.NumberOfConsoleLogons0 as NumberOfConsoleLogons,
@@ -2927,27 +3076,27 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMSoftwareFile {
+function Get-SccmSoftwareFile {
 <#
     .SYNOPSIS
 
         Returns information on inventoried non-Microsoft software files.
-        TThis option is not enabled by default in SCCM- we recommend setting SCCM
+        TThis option is not enabled by default in Sccm- we recommend setting Sccm
         to inventory all *.exe files on hosts.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -3001,26 +3150,26 @@ function Get-SCCMSoftwareFile {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMSoftwareFile
+        PS C:\> Get-SccmSession | Get-SccmSoftwareFile
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMSoftwareFile -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmSoftwareFile -ComputerFilterName WINDOWS1
 
         Returns software file information just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMSoftwareFile -FilePathFilter C:\Temp\*
+        PS C:\> Get-SccmSession | Get-SccmSoftwareFile -FilePathFilter C:\Temp\*
 
         Returns information on software files located in C:\Temp\
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -3100,12 +3249,12 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMBrowserHelperObject {
+function Get-SccmBrowserHelperObject {
 <#
     .SYNOPSIS
 
@@ -3114,12 +3263,12 @@ function Get-SCCMBrowserHelperObject {
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -3136,10 +3285,10 @@ function Get-SCCMBrowserHelperObject {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER SCCMTimeStampFilter
+    .PARAMETER SccmTimeStampFilter
 
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
+        Query only for results where the Sccm TimeStamp field matches the given filter.
+        <> operators accepted (e.g. -SccmTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER BinFileVersionFilter
 
@@ -3193,26 +3342,26 @@ function Get-SCCMBrowserHelperObject {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMBrowserHelperObject
+        PS C:\> Get-SccmSession | Get-SccmBrowserHelperObject
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMBrowserHelperObject -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmBrowserHelperObject -ComputerFilterName WINDOWS1
 
         Returns browser helper object information just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMBrowserHelperObject -DescriptionFilter *malicious*
+        PS C:\> Get-SccmSession | Get-SccmBrowserHelperObject -DescriptionFilter *malicious*
 
         Returns browser helper object information with a wildcard match for *malicious* in the description field.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -3220,7 +3369,7 @@ function Get-SCCMBrowserHelperObject {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("SCCMTimestamp", "BinFileVersion", "BinProductVersion", "Description", "FileName", "FileVersion", "Product", "ProductVersion", "Publisher", "Version")]
+        [ValidateSet("SccmTimestamp", "BinFileVersion", "BinProductVersion", "Description", "FileName", "FileVersion", "Product", "ProductVersion", "Publisher", "Version")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -3233,7 +3382,7 @@ function Get-SCCMBrowserHelperObject {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $SCCMTimeStampFilter,
+        $SccmTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -3285,7 +3434,7 @@ SELECT * FROM
          COMPUTER.ResourceID as ResourceID,
          COMPUTER.Name0 as ComputerName,
          ADAPTER.IPAddress0 as IPAddress,
-         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.TimeStamp as SccmTimeStamp,
          QUERY.BinFileVersion0 as BinFileVersion,
          QUERY.BinProductVersion0 as BinProductVersion,
          QUERY.Description0 as Description,
@@ -3312,12 +3461,12 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMShare {
+function Get-SccmShare {
 <#
     .SYNOPSIS
 
@@ -3326,12 +3475,12 @@ function Get-SCCMShare {
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -3348,10 +3497,10 @@ function Get-SCCMShare {
         Query only for results where the ComputerName field matches the given filter.
         Wildcards accepted.
 
-    .PARAMETER SCCMTimeStampFilter
+    .PARAMETER SccmTimeStampFilter
 
-        Query only for results where the SCCM TimeStamp field matches the given filter.
-        <> operators accepted (e.g. -SCCMTimeStampFilter '>2012-03-01 00:00:00.000')
+        Query only for results where the Sccm TimeStamp field matches the given filter.
+        <> operators accepted (e.g. -SccmTimeStampFilter '>2012-03-01 00:00:00.000')
 
     .PARAMETER CaptionFilter
 
@@ -3380,26 +3529,26 @@ function Get-SCCMShare {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMShare
+        PS C:\> Get-SccmSession | Get-SccmShare
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMShare -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmShare -ComputerFilterName WINDOWS1
 
         Returns share information just for the WINDOWS1 client.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMShare -DescriptionFilter *secret*
+        PS C:\> Get-SccmSession | Get-SccmShare -DescriptionFilter *secret*
 
         Returns share information with a wildcard match for *secret* in the description field.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -3407,7 +3556,7 @@ function Get-SCCMShare {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("SCCMTimestamp", "Caption", "Description", "Name", "Path")]
+        [ValidateSet("SccmTimestamp", "Caption", "Description", "Name", "Path")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
@@ -3420,7 +3569,7 @@ function Get-SCCMShare {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $SCCMTimeStampFilter,
+        $SccmTimeStampFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -3452,7 +3601,7 @@ SELECT * FROM
          COMPUTER.ResourceID as ResourceID,
          COMPUTER.Name0 as ComputerName,
          ADAPTER.IPAddress0 as IPAddress,
-         QUERY.TimeStamp as SCCMTimeStamp,
+         QUERY.TimeStamp as SccmTimeStamp,
          QUERY.Caption0 as Caption,
          QUERY.Description0 as Description,
          QUERY.Name0 as Name,
@@ -3474,12 +3623,12 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMPrimaryUser {
+function Get-SccmPrimaryUser {
 <#
     .SYNOPSIS
 
@@ -3488,12 +3637,12 @@ function Get-SCCMPrimaryUser {
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -3522,26 +3671,26 @@ function Get-SCCMPrimaryUser {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMPrimaryUser
+        PS C:\> Get-SccmSession | Get-SccmPrimaryUser
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMPrimaryUser -ComputerFilterName WINDOWS1
+        PS C:\> Get-SccmSession | Get-SccmPrimaryUser -ComputerFilterName WINDOWS1
 
         Returns primary user information for just the WINDOWS1 machine.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMPrimaryUser | Get-SCCMPrimaryUser -Unique_User_NameFilter "DOMAIN\will"
+        PS C:\> Get-SccmPrimaryUser | Get-SccmPrimaryUser -Unique_User_NameFilter "DOMAIN\will"
 
         Returns the locations where DOMAIN\Will is a primary user
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -3572,7 +3721,7 @@ function Get-SCCMPrimaryUser {
     begin {
 
         $Query = @"
--- MIN_SCCM_VERSION = 5
+-- MIN_Sccm_VERSION = 5
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -3600,7 +3749,7 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
@@ -3612,11 +3761,11 @@ SELECT * FROM
 #
 ##############################################
 
-function Find-SCCMRenamedCMD {
+function Find-SccmRenamedCMD {
 <#
     .SYNOPSIS
 
-        Finds renamed cmd.exe executables using Get-SCCMRecentlyUsedApplication
+        Finds renamed cmd.exe executables using Get-SccmRecentlyUsedApplication
         and appropriate filters.
 
         Adapted from slide 16 in John McLeod and Mike-Pilkington's
@@ -3624,14 +3773,14 @@ function Find-SCCMRenamedCMD {
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Find-SCCMRenamedCMD
+        PS C:\> Get-SccmSession | Find-SccmRenamedCMD
         
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .LINK
 
@@ -3640,38 +3789,38 @@ function Find-SCCMRenamedCMD {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session
     )
 
     process {
         # find recently launched executables in C:\ with 'Windows Command Processor' as the Description
         #   and a name not like cmd.exe
-        Get-SCCMRecentlyUsedApplication -Session $Session -FolderPathFilter "C:\*" -FileDescriptionFilter 'Windows Command Processor' -ExplorerFileNameFilter "!cmd.exe"
+        Get-SccmRecentlyUsedApplication -Session $Session -FolderPathFilter "C:\*" -FileDescriptionFilter 'Windows Command Processor' -ExplorerFileNameFilter "!cmd.exe"
     }
 }
 
 
-function Find-SCCMUnusualEXE {
+function Find-SccmUnusualEXE {
 <#
     .SYNOPSIS
 
         Finds recently launched applications that don't end in *.exe using
-        Get-SCCMRecentlyUsedApplication and appropriate filters.
+        Get-SccmRecentlyUsedApplication and appropriate filters.
 
         Adapted from slide 18 in John McLeod and Mike-Pilkington's
         "Mining for Evil" presentation.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Find-SCCMUnusualEXE
+        PS C:\> Get-SccmSession | Find-SccmUnusualEXE
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .LINK
 
@@ -3680,28 +3829,28 @@ function Find-SCCMUnusualEXE {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session
     )
 
     process {
         # find recently launched executables in C:\ that don't end in *.exe
-        Get-SCCMRecentlyUsedApplication -Session $Session -FolderPathFilter "C:\*" -ExplorerFileNameFilter "!*.exe"
+        Get-SccmRecentlyUsedApplication -Session $Session -FolderPathFilter "C:\*" -ExplorerFileNameFilter "!*.exe"
     }
 }
 
 
-function Find-SCCMRareApplication {
+function Find-SccmRareApplication {
 <#
     .SYNOPSIS
 
         Finds the rarest -Limit <X> recently launched applications that don't end in *.exe using
-        Get-SCCMRecentlyUsedApplication and appropriate filters.
+        Get-SccmRecentlyUsedApplication and appropriate filters.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Limit
 
@@ -3709,14 +3858,14 @@ function Find-SCCMRareApplication {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Find-SCCMRareApplication -Limit 10
+        PS C:\> Get-SccmSession | Find-SccmRareApplication -Limit 10
 
         Finds the 10 rarest launched applications.
 #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -3727,12 +3876,12 @@ function Find-SCCMRareApplication {
     process {
         # find all recently used applications, group by the launched ExplorerFileName,
         #   sort by the count and return the top -Limit <X> number
-        Get-SCCMRecentlyUsedApplication -Session $Session | Group-Object -Property ExplorerFileName | Sort-Object -Property Count | Select-Object -First $Limit
+        Get-SccmRecentlyUsedApplication -Session $Session | Group-Object -Property ExplorerFileName | Sort-Object -Property Count | Select-Object -First $Limit
     }
 }
 
 
-function Find-SCCMPostExploitation {
+function Find-SccmPostExploitation {
 <#
     .SYNOPSIS
 
@@ -3740,31 +3889,31 @@ function Find-SCCMPostExploitation {
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Find-SCCMPostExploitation
+        PS C:\> Get-SccmSession | Find-SccmPostExploitation
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session
     )
 
     process {
         # common post-exploitation tool names to search for in recently launched applications
         $PostExTools = "net.exe", "whoami.exe", "runas.exe", "rdpclip.exe", "at.exe", "schtasks.exe", "wmic.exe", "tasklist.exe", "sc.exe", "psexec.exe", "hostname.exe", "ver.exe", "dsquery.exe", "reg.exe", "*nmap*", "*mimikatz*", "*wce*", "*fgdump*", "*cain*", "*abel*", "*superscan*"
-        Get-SCCMRecentlyUsedApplication -Session $Session -ExplorerFileNameFilter $($PostExTools -join " or ")
+        Get-SccmRecentlyUsedApplication -Session $Session -ExplorerFileNameFilter $($PostExTools -join " or ")
     }
 }
 
 
-function Find-SCCMPostExploitationFile {
+function Find-SccmPostExploitationFile {
 <#
     .SYNOPSIS
 
@@ -3772,19 +3921,19 @@ function Find-SCCMPostExploitationFile {
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Find-SCCMPostExploitationFile
+        PS C:\> Get-SccmSession | Find-SccmPostExploitationFile
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session
     )
 
@@ -3792,12 +3941,12 @@ function Find-SCCMPostExploitationFile {
         # common post-exploitation tool names to search for in inventoried files
         $PostExTools = "net.exe", "whoami.exe", "runas.exe", "rdpclip.exe", "at.exe", "schtasks.exe", "wmic.exe", "tasklist.exe", "sc.exe", "psexec.exe", "hostname.exe", "ver.exe", "dsquery.exe", "reg.exe", "*nmap*", "*mimikatz*", "*wce*", "*fgdump*", "*cain*", "*abel*", "*superscan*"
 
-        Get-SCCMSoftwareFile -Session $Session -FileNameFilter $($PostExTools -join " or ")
+        Get-SccmSoftwareFile -Session $Session -FileNameFilter $($PostExTools -join " or ")
     }
 }
 
 
-function Find-SCCMMimikatz {
+function Find-SccmMimikatz {
 <#
     .SYNOPSIS
 
@@ -3805,29 +3954,29 @@ function Find-SCCMMimikatz {
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Find-SCCMMimikatz
+        PS C:\> Get-SccmSession | Find-SccmMimikatz
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session
     )
 
     process {
-        Get-SCCMRecentlyUsedApplication -Session $Session -Filter "(CompanyName LIKE '%gentilkiwi%') OR (FileDescription LIKE '%mimikatz%')"
+        Get-SccmRecentlyUsedApplication -Session $Session -Filter "(CompanyName LIKE '%gentilkiwi%') OR (FileDescription LIKE '%mimikatz%')"
     }
 }
 
 
-function Find-SCCMMimikatzFile {
+function Find-SccmMimikatzFile {
 <#
     .SYNOPSIS
 
@@ -3836,25 +3985,25 @@ function Find-SCCMMimikatzFile {
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Find-SCCMMimikatzFile
+        PS C:\> Get-SccmSession | Find-SccmMimikatzFile
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 #>
     [CmdletBinding()]
     [CmdletBinding(DefaultParameterSetName = 'ByName')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session
     )
 
     process {
-        Get-SCCMSoftwareFile -Session $Session -FileDescriptionFilter "*mimikatz*"
+        Get-SccmSoftwareFile -Session $Session -FileDescriptionFilter "*mimikatz*"
     }
 }
 
@@ -3865,21 +4014,21 @@ function Find-SCCMMimikatzFile {
 #
 ##############################################
 
-function Get-SCCMADForest {
+function Get-SccmADForest {
 <#
     .SYNOPSIS
 
         Returns information on Active Directory forests enumerated
-        by SCCM agents.
+        by Sccm agents.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -3897,26 +4046,26 @@ function Get-SCCMADForest {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMADForest
+        PS C:\> Get-SccmSession | Get-SccmADForest
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMADForest -DescriptionFilter "*testlab*"
+        PS C:\> Get-SccmSession | Get-SccmADForest -DescriptionFilter "*testlab*"
 
         Returns information on forests with 'testlab' in the description.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMADForest -Filter "Description like '%testlab%'"
+        PS C:\> Get-SccmSession | Get-SccmADForest -Filter "Description like '%testlab%'"
 
         Returns information on forests with 'testlab' in the description.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -4020,26 +4169,26 @@ FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMADUser {
+function Get-SccmADUser {
 <#
     .SYNOPSIS
 
         Returns information on Active Directory users enumerated
-        by SCCM agents.
+        by Sccm agents.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -4057,20 +4206,20 @@ function Get-SCCMADUser {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMADUser
+        PS C:\> Get-SccmSession | Get-SccmADUser
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMADUser -Distinguished_Name '*will*'
+        PS C:\> Get-SccmSession | Get-SccmADUser -Distinguished_Name '*will*'
 
         Returns information on groups with 'will' in the distinguished name.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -4169,26 +4318,26 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMADGroup {
+function Get-SccmADGroup {
 <#
     .SYNOPSIS
 
         Returns information on Active Directory group enumerated
-        by SCCM agents.
+        by Sccm agents.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -4206,20 +4355,20 @@ function Get-SCCMADGroup {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMADGroup
+        PS C:\> Get-SccmSession | Get-SccmADGroup
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMADGroup -NameFilter "*Domain Controllers*"
+        PS C:\> Get-SccmSession | Get-SccmADGroup -NameFilter "*Domain Controllers*"
 
         Returns information on groups with 'Domain Controllers' in the name.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -4300,26 +4449,26 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
 
 
-function Get-SCCMADGroupMember {
+function Get-SccmADGroupMember {
 <#
     .SYNOPSIS
 
         Returns information on Active Directory group membership enumerated
-        by SCCM agents.
+        by Sccm agents.
 
     .PARAMETER Session
 
-        The custom PowerSCCM.Session object to query, generated/stored by New-SCCMSession
-        and retrievable with Get-SCCMSession. Required. Passable on the pipeline.
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
     .PARAMETER Newest
 
-        Restrict the underlying SCCM SQL query to only return the -Newest <X> number of results.
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
 
     .PARAMETER OrderBy
@@ -4337,20 +4486,20 @@ function Get-SCCMADGroupMember {
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMADGroup
+        PS C:\> Get-SccmSession | Get-SccmADGroup
 
-        Runs the query against all current SCCM sessions.
+        Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SCCMSession | Get-SCCMADGroup -NameFilter "*Domain Controllers*"
+        PS C:\> Get-SccmSession | Get-SccmADGroup -NameFilter "*Domain Controllers*"
 
         Returns information on groups with 'Domain Controllers' in the name.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
         [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
-        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSCCM.Session'})]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
         [Int]
@@ -4406,6 +4555,6 @@ SELECT * FROM
     }
 
     process {   
-        Invoke-SQLQuery -Session $Session -Query $Query
+        Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
