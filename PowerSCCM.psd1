@@ -53,6 +53,7 @@ FunctionsToExport = @(
     'Find-SccmMimikatz',
     'Find-SccmMimikatzFile',
     'Get-SccmADForest',
+    'Get-SccmADComputer',
     'Get-SccmADUser',
     'Get-SccmADGroup',
     'Get-SccmADGroupMember'

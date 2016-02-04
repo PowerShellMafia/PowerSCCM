@@ -4509,6 +4509,187 @@ FROM
 }
 
 
+function Get-SccmADComputer {
+<#
+    .SYNOPSIS
+
+        Returns information on Active Directory forests enumerated
+        by Sccm agents.
+
+    .PARAMETER Session
+
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
+
+    .PARAMETER Newest
+
+        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
+        Detaults to the max value of a 32-bit integer (2147483647).
+
+    .PARAMETER OrderBy
+
+        Order the results by a particular field.
+
+    .PARAMETER Descending
+
+        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
+        the given field in descending order.
+
+    .PARAMETER Filter
+
+        Raw filter to build a WHERE clause. Form of "Description like '%testlab%'""
+
+    .EXAMPLE
+
+        PS C:\> Get-SccmSession | Get-SccmADForest
+
+        Runs the query against all current Sccm sessions.
+
+    .EXAMPLE
+
+        PS C:\> Get-SccmSession | Get-SccmADForest -DescriptionFilter "*testlab*"
+
+        Returns information on forests with 'testlab' in the description.
+
+    .EXAMPLE
+
+        PS C:\> Get-SccmSession | Get-SccmADForest -Filter "Description like '%testlab%'"
+
+        Returns information on forests with 'testlab' in the description.
+#>
+    [CmdletBinding(DefaultParameterSetName = 'None')]
+    param(
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
+        $Session,
+
+        [Int]
+        $Newest = [Int32]::MaxValue,
+
+        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
+        [String]
+        [ValidateSet("CreatedOn", "Description", "DiscoveryEnabled", "ForestFQDN", "ForestID", "ModifiedBy", "ModifiedOn", "PublishingEnabled", "PublishingPath", "Tombstoned", "LastDiscoveryTime", "Account", "LastDiscoveryStatus", "PublishingStatus", "DiscoveredTrusts", "DiscoveredDomains", "DiscoveredADSites", "DiscoveredIPSubnets")]
+        $OrderBy,
+
+        [Parameter(ParameterSetName = 'OrderBy')]
+        [Switch]
+        $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ResourceIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Distinguished_NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ActiveFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Client_VersionFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Full_Domain_NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Last_Logon_TimestampFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $User_DomainFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $User_NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Netbios_NameFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Object_GUIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Operating_System_Name_andFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Primary_Group_IDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $SIDFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $User_Account_ControlFilter,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Filter
+    )
+
+    begin {
+
+        $SqlQuery = @"
+SELECT * FROM
+(    
+    SELECT TOP $Newest
+        ResourceID,
+        Name0 as Name,
+        Distinguished_Name0 as Distinguished_Name,
+        Active0 as Active,
+        Client_Version0 as Client_Version,
+        Full_Domain_Name0 as Full_Domain_Name,
+        Last_Logon_Timestamp0 as Last_Logon_Timestamp,
+        User_Domain0 as User_Domain,
+        User_Name0 as User_Name,
+        Netbios_Name0 as Netbios_Name,
+        Object_GUID0 as Object_GUID,
+        Operating_System_Name_and0 as Operating_System_Name_and,
+        Primary_Group_ID0 as Primary_Group_ID,
+        SID0 as SID,
+        User_Account_Control0 as User_Account_Control
+    FROM
+         v_R_System
+)
+    AS DATA
+"@
+
+        $WMIQuery = "SELECT * FROM SMS_R_System"
+        
+        # add in our filter logic
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
+    }
+
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
+    }
+}
+
+
 function Get-SccmADUser {
 <#
     .SYNOPSIS
@@ -4624,6 +4805,7 @@ function Get-SccmADUser {
 SELECT * FROM
 (    
     SELECT TOP $Newest
+        ResourceID,
         Name0 AS Name,
         User_Name0 AS User_Name,
         User_Principal_Name0 AS User_Principal_Name,
@@ -4724,12 +4906,16 @@ function Get-SccmADGroup {
 
         [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
         [String]
-        [ValidateSet("Name", "Usergroup_Name", "AD_Domain_Name", "Windows_NT_Domain", "Full_Domain_Name", "Full_User_Name", "Mail", "Name", "Network_Operating_System", "SID", "Unique_Usergroup_Name", "ResourceID", "ResourceType", "Creation_Date", "Group_Type")]
+        [ValidateSet("ResourceID", "Name", "Usergroup_Name", "AD_Domain_Name", "Windows_NT_Domain", "Full_Domain_Name", "Full_User_Name", "Mail", "Name", "Network_Operating_System", "SID", "Unique_Usergroup_Name", "ResourceID", "ResourceType", "Creation_Date", "Group_Type")]
         $OrderBy,
 
         [Parameter(ParameterSetName = 'OrderBy')]
         [Switch]
         $Descending,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ResourceIDFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -4746,10 +4932,6 @@ function Get-SccmADGroup {
         [String]
         [ValidateNotNullOrEmpty()]
         $SIDFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $ResourceIDFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -4774,6 +4956,7 @@ function Get-SccmADGroup {
 SELECT * FROM
 (    
     SELECT TOP $Newest
+        ResourceID,
         Name0 AS Name,
         Usergroup_Name0 AS Usergroup_Name,
         AD_Domain_Name0 AS AD_Domain_Name,

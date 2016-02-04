@@ -39,25 +39,25 @@ To retrieve all current SCCM session objects, us **Get-SccmSession** with option
 
 Various functions that deal with querying/changing information concerning the SCCM database or server, as opposed to dealing with querying inventoried client information.
 
-### Find-SccmSiteCode
+#### Find-SccmSiteCode
 Finds SCCM site codes for a given server.
 
-### Get-SccmApplicationCI
+#### Get-SccmApplicationCI
 Returns information on user-deployed applications in an SCCM database.
 
-### Get-SccmPackage
+#### Get-SccmPackage
 Returns information on user-deployed packages in an SCCM database.
 
-### Get-SccmConfigurationItem
+#### Get-SccmConfigurationItem
 Returns SCCM configuration items in an SCCM database.
 
-### Set-SccmConfigurationItem
+#### Set-SccmConfigurationItem
 Sets a field to a particular value for a SCCM configuration keyed by CI_ID.
 
-### Get-SccmCollection
+#### Get-SccmCollection
 Returns SCCM collections that exist on the primary site server.
 
-### Get-SccmCollectionMember
+#### Get-SccmCollectionMember
 Returns SCCM collection members.
 
 ## Get-Sccm*
@@ -79,41 +79,41 @@ All of these functions also share a common set of optional parameters:
 Each function also has a set of custom -XFilter parameters that allow for query filtering on specific field names/values.
 
 
-### Get-SccmService
+#### Get-SccmService
 
 Returns information on the current set of running services as of the last SCCM agent query/checkin.
 
-### Get-SccmServiceHistory
+#### Get-SccmServiceHistory
 Returns information on the historical set of running services as of the last SCCM agent query/checkin.
 
-### Get-SccmAutoStart
+#### Get-SccmAutoStart
 Returns information on the set of autostart programs as of the last SCCM agent query/checkin.
 
-### Get-SccmProcess
+#### Get-SccmProcess
 Returns information on the set of currently running processes as of the last SCCM agent query/checkin.
 
-### Get-SccmProcessHistory
+#### Get-SccmProcessHistory
 Returns information on the historical set of running processes as of the last SCCM agent query/checkin.
 
-### Get-SccmRecentlyUsedApplication
+#### Get-SccmRecentlyUsedApplication
 Returns information on recently launched applications on hosts as of the last SCCM agent query/checkin.
 
-### Get-SccmDriver
+#### Get-SccmDriver
 Returns information on the set of currently laoded system drivers as of the last SCCM agent query/checkin.
 
-### Get-SccmConsoleUsage
+#### Get-SccmConsoleUsage
 Returns historical information on user console usage as of the last SCCM agent query/checkin.
 
-### Get-SccmSoftwareFile
+#### Get-SccmSoftwareFile
 Returns information on inventoried non-Microsoft software files. **This option is not enabled by default in SCCM**- we recommend setting SCCM to inventory all *.exe files on hosts.
 
-### Get-SccmBrowserHelperObject
+#### Get-SccmBrowserHelperObject
 Returns information on discovered browser helper objects. **This option is not enabled by default in SCCM**.
 
-### Get-SccmShare
+#### Get-SccmShare
 Returns information on discovered shares.**This option is not enabled by default in SCCM**.
 
-### Get-SccmPrimaryUser
+#### Get-SccmPrimaryUser
 Returns user/machine pairings where the user is set as a 'Primary User' through SCCM.
 
 
@@ -121,38 +121,41 @@ Returns user/machine pairings where the user is set as a 'Primary User' through 
 
 Meta-functions that use the Get-Sccm* query functions to find common 'bad' things. All of these functions -Session <PowerSCCM.Session> (passable on the pipeline).
 
-### Find-SccmRenamedCMD
+#### Find-SccmRenamedCMD
 Finds renamed cmd.exe executables using Get-SccmRecentlyUsedApplication and appropriate filters.
 
-### Find-SccmUnusualEXE
+#### Find-SccmUnusualEXE
 Finds recently launched applications that don't end in *.exe using Get-SccmRecentlyUsedApplication and appropriate filters.
 
-### Find-SccmRareApplication
+#### Find-SccmRareApplication
 Finds the rarest -Limit <X> recently launched applications that don't end in *.exe using Get-SccmRecentlyUsedApplication and appropriate filters.
 
-### Find-SccmPostExploitation
+#### Find-SccmPostExploitation
 Finds recently launched applications commonly used in post-exploitation.
 
-### Find-SccmPostExploitationFile
+#### Find-SccmPostExploitationFile
 Finds indexed .exe's commonly used in post-exploitation.
 
-### Find-SccmMimikatz
+#### Find-SccmMimikatz
 Finds launched mimikatz instances by searching the 'FileDescription' and 'CompanyName' fields of recently launched applications.
 
-### Find-SccmMimikatzFile
+#### Find-SccmMimikatzFile
 Finds inventoried mimikatz.exe instances by searching the 'FileDescription' field of inventoried .exe's.
 
 
 ## SCCM Active Directory Functions
 
-### Get-SccmADForest
+#### Get-SccmADForest
 Returns information on Active Directory forests enumerated by SCCM agents.
 
-### Get-SccmADUser
+#### Get-SccmADComputer
+Returns information on Active Directory computers.
+
+#### Get-SccmADUser
 Returns information on Active Directory users enumerated by SCCM agents.
 
-### Get-SccmADGroup
+#### Get-SccmADGroup
 Returns information on Active Directory group enumerated by SCCM agents.
 
-### Get-SccmADGroupMember
+#### Get-SccmADGroupMember
 Returns information on Active Directory group membership enumerated by SCCM agents
