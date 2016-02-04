@@ -2311,11 +2311,27 @@ SELECT * FROM
 
     process {
         if($Session.ConnectionType -like 'WMI') {
+            
+            # get all computer objects so we can link the name/IP with the ResourceID from the SMS_G_System_SYSTEM_CONSOLE_USER class
+            $Computers = Invoke-SccmQuery -Session $Session -Query "SELECT ResourceId,Name,IPAddresses FROM SMS_R_System"
+
             if($PSBoundParameters['Newest']) {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
             else {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
         }
         else {
@@ -2514,11 +2530,27 @@ SELECT * FROM
 
     process {
         if($Session.ConnectionType -like 'WMI') {
+            
+            # get all computer objects so we can link the name/IP with the ResourceID from the SMS_G_System_SYSTEM_CONSOLE_USER class
+            $Computers = Invoke-SccmQuery -Session $Session -Query "SELECT ResourceId,Name,IPAddresses FROM SMS_R_System"
+
             if($PSBoundParameters['Newest']) {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
             else {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
         }
         else {
@@ -2952,11 +2984,27 @@ SELECT * FROM
 
     process {
         if($Session.ConnectionType -like 'WMI') {
+            
+            # get all computer objects so we can link the name/IP with the ResourceID from the SMS_G_System_SYSTEM_CONSOLE_USER class
+            $Computers = Invoke-SccmQuery -Session $Session -Query "SELECT ResourceId,Name,IPAddresses FROM SMS_R_System"
+
             if($PSBoundParameters['Newest']) {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
             else {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
         }
         else {
@@ -3190,6 +3238,7 @@ function Get-SccmConsoleUsage {
 
         Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
         Detaults to the max value of a 32-bit integer (2147483647).
+        For WMI connections, this is performed with Select-Object on the client side.
 
     .PARAMETER OrderBy
 
@@ -3326,7 +3375,6 @@ SELECT * FROM
     AS DATA
 "@
 
-        # TODO: link with ResourceId in SMS_G_System_COMPUTER_SYSTEM class to get computer name
         $WMIQuery = "SELECT * FROM SMS_G_System_SYSTEM_CONSOLE_USER"
         
         # add in our filter logic
@@ -3336,11 +3384,27 @@ SELECT * FROM
 
     process {
         if($Session.ConnectionType -like 'WMI') {
+            
+            # get all computer objects so we can link the name/IP with the ResourceID from the SMS_G_System_SYSTEM_CONSOLE_USER class
+            $Computers = Invoke-SccmQuery -Session $Session -Query "SELECT ResourceId,Name,IPAddresses FROM SMS_R_System"
+
             if($PSBoundParameters['Newest']) {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
             else {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
         }
         else {
@@ -3523,11 +3587,27 @@ SELECT * FROM
 
     process {
         if($Session.ConnectionType -like 'WMI') {
+            
+            # get all computer objects so we can link the name/IP with the ResourceID from the SMS_G_System_SYSTEM_CONSOLE_USER class
+            $Computers = Invoke-SccmQuery -Session $Session -Query "SELECT ResourceId,Name,IPAddresses FROM SMS_R_System"
+
             if($PSBoundParameters['Newest']) {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
             else {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
         }
         else {
@@ -3748,11 +3828,27 @@ SELECT * FROM
 
     process {
         if($Session.ConnectionType -like 'WMI') {
+            
+            # get all computer objects so we can link the name/IP with the ResourceID from the SMS_G_System_SYSTEM_CONSOLE_USER class
+            $Computers = Invoke-SccmQuery -Session $Session -Query "SELECT ResourceId,Name,IPAddresses FROM SMS_R_System"
+
             if($PSBoundParameters['Newest']) {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
             else {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
         }
         else {
@@ -3923,11 +4019,27 @@ SELECT * FROM
 
     process {
         if($Session.ConnectionType -like 'WMI') {
+            
+            # get all computer objects so we can link the name/IP with the ResourceID from the SMS_G_System_SYSTEM_CONSOLE_USER class
+            $Computers = Invoke-SccmQuery -Session $Session -Query "SELECT ResourceId,Name,IPAddresses FROM SMS_R_System"
+
             if($PSBoundParameters['Newest']) {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
             else {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | ForEach-Object {
+                    $ResourceId = $_.ResourceId
+                    $Computer = $Computers | Where-Object {$_.ResourceId -eq $ResourceId}
+                    $_ | Add-Member Noteproperty 'SystemName' $Computer.name
+                    $_ | Add-Member Noteproperty 'SystemIP' $Computer.IPAddresses
+                    $_
+                }
             }
         }
         else {
