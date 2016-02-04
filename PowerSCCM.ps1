@@ -701,8 +701,11 @@ function Get-WMIQueryFilter {
 
         $Parameters.GetEnumerator() | Where-Object {($_.Key -like '*Filter') -and ($_.Key -ne 'Filter')} | ForEach-Object {
 
-            # get the SQL wildcards correct
+            # get the WQL wildcards correct
             $Value = $_.Value.Replace('*', '%')
+
+            # escape backslashes for WQL
+            $Value = $Value.Replace('\', '\\')
 
             # if we have multiple values to build clauses for
             if($Value.Contains(" or ")){
@@ -712,7 +715,12 @@ function Get-WMIQueryFilter {
                 $Values = @($Value)
             }
 
-            $Query += "`nWHERE ("
+            if($Query.Contains("WHERE")) {
+                $Query += "`nAND ("
+            }
+            else {
+                $Query += "`nWHERE ("
+            }
 
             $Clauses = @()
 
