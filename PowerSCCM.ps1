@@ -18,23 +18,28 @@ function New-SccmSession {
     .SYNOPSIS
 
         Initiates a new Sccm database connection, returning a custom PowerSccm.Session
-        object that stores a unique Id and Name, as well as the ComputerName and 
-        DatabaseName used for the connection, and the [System.Data.SQLClient.SQLConnection]
-        object used for future queries of the specified database. Also stores the
-        PowerSccm.Session object in the $Script:SccmSessions array for later access by
-        Get-SccmSession.
+        object that stores a unique Id and Name, as well as permission and connection
+        information. Also stores the PowerSccm.Session object in the $Script:SccmSessions 
+        array for later access by Get-SccmSession.
 
     .PARAMETER ComputerName
 
         The hostname of the Sccm database server.
 
-    .PARAMETER DatabaseName
+    .PARAMETER SiteCode
 
-        The name of the database on the Sccm server.
+        The three letter site code of the Sccm distribution site. Discoverable with Find-SccmSiteCode.
+
+    .PARAMETER ConnectionType
+
+        The method to connect to the remote Sccm server. 'WMI' uses a WMI connection and the
+        Sccm SMS_ WMI classes. 'Database'/'DB'/'SQL' connects to the Sccm MSSQL backend database.
+        Default to WMI.
 
     .PARAMETER Credential
 
-        A [Management.Automation.PSCredential] object that stores a SqlUserName and SqlPassword.
+        A [Management.Automation.PSCredential] object that stores a SqlUserName and SqlPassword
+        or a domain credential to use for WMI connections.
 
     .PARAMETER SqlUserName
 
@@ -46,14 +51,19 @@ function New-SccmSession {
 
     .EXAMPLE
 
-        PS C:\> New-SccmSession -ComputerName SccmServer -DatabaseName CM_LOL
+        PS C:\> New-SccmSession -ComputerName SccmServer -SiteCode LOL
     
-        Connect to the CM_LOL database on SccmServer using integrated Windows authentication
-        and store the connection object.
+        Connect to the LOL sitecode namespace on SccmServer over WMI.    
 
     .EXAMPLE
 
-        PS C:\> New-SccmSession -ComputerName Sccm -DatabaseName CM_LOL -SqlUserName sqladmin -SqlPassword 'Password123!'
+        PS C:\> New-SccmSession -ComputerName SccmServer -SiteCode LOL -ConnectionType Database
+    
+        Connect to the CM_LOL MSSQL database on SccmServer.
+
+    .EXAMPLE
+
+        PS C:\> New-SccmSession -ComputerName Sccm -SiteCode LOL -SqlUserName sqladmin -SqlPassword 'Password123!'
 
         Connect to the CM_LOL database on SccmServer using explicit MSSQL credentials
         and store the connection object.
@@ -67,13 +77,13 @@ function New-SccmSession {
 
         [Parameter(Position = 1, Mandatory = $True)]
         [String]
-        [ValidateNotNullOrEmpty()]
+        [ValidatePattern('^[A-Za-z]{3}$')]
         $SiteCode,
 
         [Parameter(Position = 2)]
         [String]
-        [ValidateSet("Database", "DB", "WMI")]
-        $ConnectionMethod = "WMI",
+        [ValidateSet("Database", "DB", "SQL", "WMI")]
+        $ConnectionType = "SQL",
 
         [Parameter(Position = 3)]
         [Management.Automation.PSCredential]
@@ -91,54 +101,14 @@ function New-SccmSession {
         $SqlPassword
     )
 
-    if($ConnectionMethod -like "WMI") {
-
-        # if we're establishing the session via WMI
-        
-        Write-Verbose "Connecting to Sccm server\site $ComputerName\$SiteCode via WMI"
-
-        try {
-
-            $Query = "SELECT * FROM SMS_ProviderLocation where SiteCode = '$SiteCode'"
-            if($Credential) {
-                $SccmProvider = Get-WmiObject -ComputerName $ComputerName -Query $Query -Namespace "root\sms" -Credential $Credential
-            }
-            else {
-                $SccmProvider = Get-WmiObject -ComputerName $ComputerName -Query $Query -Namespace "root\sms"
-            }
-
-            $Script:SccmSessionCounter += 1
-
-            $SccmSessionObject = New-Object PSObject
-            $SccmSessionObject | Add-Member Noteproperty 'Id' $Script:SccmSessionCounter
-            $SccmSessionObject | Add-Member Noteproperty 'Name' $($SiteCode + $Script:SccmSessionCounter)
-            $SccmSessionObject | Add-Member Noteproperty 'ComputerName' $ComputerName
-            $SccmSessionObject | Add-Member Noteproperty 'Credential' $Credential
-            $SccmSessionObject | Add-Member Noteproperty 'SiteCode' $SiteCode
-            $SccmSessionObject | Add-Member Noteproperty 'ConnectionMethod' $ConnectionMethod
-            $SccmSessionObject | Add-Member Noteproperty 'SccmVersion' $Null
-            $SccmSessionObject | Add-Member Noteproperty 'Permissions' @("ALL")
-            $SccmSessionObject | Add-Member Noteproperty 'Provider' $SccmProvider
-            
-            # add in our custom object type
-            $SccmSessionObject.PSObject.TypeNames.Add('PowerSccm.Session')
-
-            $SccmVersion = (Invoke-SccmQuery -Session $SccmSessionObject -Query "SELECT * FROM SMS_R_System" | Select-Object -First 1 -Property ClientVersion).ClientVersion.Split(".")[0]
-            $SccmSessionObject.SccmVersion = $SccmVersion
-        }
-        catch {
-            Write-Error "[!] Error connecting to $ComputerName\$WMISiteCode via WMI : $_"
-        }
-    }
-
-    else {
-        # if we're establishing the session via the SCCM database
+    if(($ConnectionType -notlike "WMI") -or $PSBoundParameters['SqlUserName']) {
+        # if we're connecting to the Sccm MSSQL database
         try {
 
             $DatabaseName = "CM_$SiteCode"
-            $SQLConnection = New-Object System.Data.SQLClient.SQLConnection
-            
             Write-Verbose "Connecting to Sccm server\database $ComputerName\$DatabaseName"
+
+            $SQLConnection = New-Object System.Data.SQLClient.SQLConnection
 
             if($PSBoundParameters['Credential']) {
                 $SqlUserName = $Credential.UserName
@@ -168,10 +138,9 @@ function New-SccmSession {
             $SccmSessionObject | Add-Member Noteproperty 'ComputerName' $ComputerName
             $SccmSessionObject | Add-Member Noteproperty 'Credential' $Null
             $SccmSessionObject | Add-Member Noteproperty 'SiteCode' $SiteCode
-            $SccmSessionObject | Add-Member Noteproperty 'ConnectionMethod' $ConnectionMethod
+            $SccmSessionObject | Add-Member Noteproperty 'ConnectionType' $ConnectionType
             $SccmSessionObject | Add-Member Noteproperty 'SccmVersion' $Null
             $SccmSessionObject | Add-Member Noteproperty 'Permissions' $Null
-            # $SccmSessionObject | Add-Member Noteproperty 'SqlConnection' $SQLConnection
             $SccmSessionObject | Add-Member Noteproperty 'Provider' $SQLConnection
             
             # add in our custom object type
@@ -199,7 +168,45 @@ function New-SccmSession {
             Write-Error "[!] Error connecting to $ComputerName\$DatabaseName : $_"
         }
     }
-    
+
+    else {
+
+        Write-Verbose "Connecting to Sccm server\site $ComputerName\$SiteCode via WMI"
+
+        try {
+
+            $Query = "SELECT * FROM SMS_ProviderLocation where SiteCode = '$SiteCode'"
+            if($Credential) {
+                $SccmProvider = Get-WmiObject -ComputerName $ComputerName -Query $Query -Namespace "root\sms" -Credential $Credential
+            }
+            else {
+                $SccmProvider = Get-WmiObject -ComputerName $ComputerName -Query $Query -Namespace "root\sms"
+            }
+
+            $Script:SccmSessionCounter += 1
+
+            $SccmSessionObject = New-Object PSObject
+            $SccmSessionObject | Add-Member Noteproperty 'Id' $Script:SccmSessionCounter
+            $SccmSessionObject | Add-Member Noteproperty 'Name' $($SiteCode + $Script:SccmSessionCounter)
+            $SccmSessionObject | Add-Member Noteproperty 'ComputerName' $ComputerName
+            $SccmSessionObject | Add-Member Noteproperty 'Credential' $Credential
+            $SccmSessionObject | Add-Member Noteproperty 'SiteCode' $SiteCode
+            $SccmSessionObject | Add-Member Noteproperty 'ConnectionType' $ConnectionType
+            $SccmSessionObject | Add-Member Noteproperty 'SccmVersion' $Null
+            $SccmSessionObject | Add-Member Noteproperty 'Permissions' @("ALL")
+            $SccmSessionObject | Add-Member Noteproperty 'Provider' $SccmProvider
+            
+            # add in our custom object type
+            $SccmSessionObject.PSObject.TypeNames.Add('PowerSccm.Session')
+
+            $SccmVersion = (Invoke-SccmQuery -Session $SccmSessionObject -Query "SELECT * FROM SMS_R_System" | Select-Object -First 1 -Property ClientVersion).ClientVersion.Split(".")[0]
+            $SccmSessionObject.SccmVersion = $SccmVersion
+        }
+        catch {
+            Write-Error "[!] Error connecting to $ComputerName\$WMISiteCode via WMI : $_"
+        }
+    }
+
     if($SccmSessionObject) {
         # return the new session object to the pipeline        
         $SccmSessionObject
@@ -214,8 +221,8 @@ function Get-SccmSession {
 <#
     .SYNOPSIS
 
-        Returns a stored database connection (keyed by DatabaseName) or all
-        stored database connections (the default).
+        Returns a specified stored PowerSccm.Session object or all
+        stored PowerSccm.Session objects.
 
     .PARAMETER Id
 
@@ -236,40 +243,46 @@ function Get-SccmSession {
         The SiteCode of a stored Sccm session object created by New-SccmSession,
         wildcards accepted.
 
-    .PARAMETER ConnectionMethod
+    .PARAMETER ConnectionType
 
-        The ConnectionMethod of a stored Sccm session object created by New-SccmSession,
+        The ConnectionType of a stored Sccm session object created by New-SccmSession,
         wildcards accepted.
 
     .EXAMPLE
 
         PS C:\> Get-SccmSession
 
-        Return all active Sccm database sessions stored.
+        Return all active Sccm sessions stored.
 
     .EXAMPLE
 
         PS C:\> Get-SccmSession -Id 3
 
-        Return the active database sessions stored for Id of 3
+        Return the active sessions stored for Id of 3
 
     .EXAMPLE
 
-        PS C:\> Get-SccmSession -Name CM_LOL1
+        PS C:\> Get-SccmSession -Name LOL1
 
-        Return named CM_LOL1 active database session
+        Return named LOL1 session.
 
     .EXAMPLE
 
         PS C:\> Get-SccmSession -ComputerName SccmSERVER
 
-        Return the active database sessions stored for the SccmSERVER machine
+        Return the active sessions stored for the SccmSERVER machine
 
     .EXAMPLE
 
-        PS C:\> Get-SccmSession -DatabaseName CM_LOL
+        PS C:\> Get-SccmSession -SiteCode LOL
 
-        Return the active database sessions stored for CM_LOL.
+        Return the active sessions stored sitcode LOL.
+
+    .EXAMPLE
+
+        PS C:\> Get-SccmSession -ConnectionType WMI
+
+        Return active WMI sessions.
 #>
     [CmdletBinding()]
     param(
@@ -293,13 +306,13 @@ function Get-SccmSession {
 
         [Parameter(ValueFromPipelineByPropertyName=$True)]
         [String]
-        [ValidateNotNullOrEmpty()]
+        [ValidatePattern('^[A-Za-z]{3}$')]
         $SiteCode,
 
         [Parameter(ValueFromPipelineByPropertyName=$True)]
         [String]
-        [ValidateSet("Database", "DB", "WMI")]
-        $ConnectionMethod
+        [ValidateSet("Database", "DB", "SQL", "WMI")]
+        $ConnectionType
     )
 
     if($PSBoundParameters['Session']) {
@@ -339,9 +352,9 @@ function Get-SccmSession {
             }
         }
 
-        elseif($PSBoundParameters['ConnectionMethod']) {
+        elseif($PSBoundParameters['ConnectionType']) {
             $Script:SccmSessions.Clone() | Where-Object {
-                $_.ConnectionMethod -like $ConnectionMethod
+                $_.ConnectionType -like $ConnectionType
             }
         }
 
@@ -357,7 +370,7 @@ function Remove-SccmSession {
     .SYNOPSIS
 
         Closes and destroys a Sccm database connection object either passed
-        on the pipeline or specified by -DatabaseName.
+        on the pipeline or specified by the Id/Name/ComputerName/SiteCode/ConnectionType.
 
     .PARAMETER Session
 
@@ -383,9 +396,9 @@ function Remove-SccmSession {
         The SiteCode of a stored Sccm session object created by New-SccmSession,
         wildcards accepted.
 
-    .PARAMETER ConnectionMethod
+    .PARAMETER ConnectionType
 
-        The ConnectionMethod of a stored Sccm session object created by New-SccmSession,
+        The ConnectionType of a stored Sccm session object created by New-SccmSession,
         wildcards accepted.
 
     .EXAMPLE
@@ -396,9 +409,9 @@ function Remove-SccmSession {
 
     .EXAMPLE
 
-        PS C:\> Remove-SccmSession -Name CM_LOL1
+        PS C:\> Remove-SccmSession -Name LOL1
 
-        Destroy/remove the named CM_LOL1 active database session
+        Destroy/remove the named LOL1 active database session
 
     .EXAMPLE
 
@@ -408,15 +421,15 @@ function Remove-SccmSession {
 
     .EXAMPLE
 
-        PS C:\> Remove-SccmSession -DatabaseName CM_LOL
+        PS C:\> Remove-SccmSession -SiteCode LOL
 
-        Destroy/remove the active database sessions stored for CM_LOL.
+        Destroy/remove the active database sessions stored for sitecode of LOL.
 
     .EXAMPLE
 
-        PS C:\> Get-SccmSession -Name CM_LOL1 | Remove-SccmSession
+        PS C:\> Get-SccmSession -Name LOL1 | Remove-SccmSession
 
-        Close/destroy the active database session stored for the CM_LOL1 named session.
+        Close/destroy the active database session stored for the LOL1 named session.
 #>
     [CmdletBinding()]
     param(
@@ -440,20 +453,20 @@ function Remove-SccmSession {
 
         [Parameter(ValueFromPipelineByPropertyName=$True)]
         [String]
-        [ValidateNotNullOrEmpty()]
+        [ValidatePattern('^[A-Za-z]{3}$')]
         $SiteCode,
 
         [Parameter(ValueFromPipelineByPropertyName=$True)]
         [String]
-        [ValidateSet("Database", "DB", "WMI")]
-        $ConnectionMethod
+        [ValidateSet("Database", "DB", "SQL", "WMI")]
+        $ConnectionType
     )
 
     process {
         Get-SccmSession @PSBoundParameters | ForEach-Object {
             Write-Verbose "Removing session '$($_.Name)'"
-            if($_.ConnectionMethod -NotLike "WMI") {
-                $_.SqlConnection.Close()
+            if($_.ConnectionType -NotLike "WMI") {
+                $_.Provider.Close()
             }
             $Script:SccmSessions.Remove($_)
         }
@@ -502,7 +515,7 @@ function Invoke-SccmQuery {
             }
         }
 
-        if($Session.ConnectionMethod -Like "WMI") {
+        if($Session.ConnectionType -Like "WMI") {
 
             Write-Verbose "Running WMI query on session $($Session.Name): $Query"
             $Namespace = $($Session.Provider.NamespacePath -split "\\", 4)[3]
@@ -529,11 +542,11 @@ function Invoke-SccmQuery {
 }
 
 
-function Get-FilterQuery {
+function Get-SQLQueryFilter {
 <#
     .SYNOPSIS
 
-        Helper that takes a -Query string and a set of PSBoundParameters
+        Helper that takes a -Query SQL string and a set of PSBoundParameters
         and returns the appropriate final query string for a Get-Sccm*
         function based on the given filter options.
 
@@ -557,7 +570,7 @@ function Get-FilterQuery {
         $Parameters
     )
 
-    if($Parameters['Filter']) {
+    if($Parameters['FilterRaw']) {
         # if a single hard -Filter <X> is set, ignore other filter parameters
         $Filter = $Filter.Replace('*', '%')
 
@@ -650,6 +663,101 @@ function Get-FilterQuery {
 }
 
 
+function Get-WMIQueryFilter {
+<#
+    .SYNOPSIS
+
+        Helper that takes a -Query WMI string and a set of PSBoundParameters
+        and returns the appropriate final query string for a Get-Sccm*
+        function based on the given filter options.
+
+    .PARAMETER Query
+
+        The multi-line WMI query string to append logic to.
+
+    .PARAMETER Parameters
+
+        The passed $PSBoundParameter set.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0, Mandatory=$True)]
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Query,
+
+        [Parameter(Position = 1, Mandatory=$True)]
+        [ValidateNotNullOrEmpty()]
+        $Parameters
+    )
+
+    if($Parameters['Filter']) {
+        # if a single hard -Filter <X> is set, ignore other filter parameters
+        $Filter = $Filter.Replace('*', '%')
+
+        $Query += "`nWHERE ($Filter)"
+    }
+    else {
+
+        $Parameters.GetEnumerator() | Where-Object {($_.Key -like '*Filter') -and ($_.Key -ne 'Filter')} | ForEach-Object {
+
+            # get the SQL wildcards correct
+            $Value = $_.Value.Replace('*', '%')
+
+            # if we have multiple values to build clauses for
+            if($Value.Contains(" or ")){
+                $Values = $Value -split " or " | ForEach-Object {$_.trim()}
+            }
+            else {
+                $Values = @($Value)
+            }
+
+            $Query += "`nWHERE ("
+
+            $Clauses = @()
+
+            ForEach ($Value in $Values) {
+
+                if($Value.StartsWith('!')) {
+                    $Operator = "NOT LIKE"
+                    $Value = $Value.Substring(1)
+                }
+                elseif($Value.StartsWith("<") -or $Value.StartsWith(">")) {
+                    $Operator = $Value[0]
+                    $Value = $Value.Substring(1)
+                }
+                else {
+                    $Operator = "LIKE"
+                }
+
+                if($_.Key -eq "ComputerNameFilter") {
+
+                    $IP = $Null
+                    $IPAddress = [Net.IPAddress]::TryParse($Value, [Ref] $IP)
+
+                    if($IPAddress) {
+                        $Clauses += @("IPAddress $Operator '$($Value)%'")
+                    }
+                    else {
+                        # otherwise we have a computer name
+                        $Clauses += @("ComputerName $Operator '$Value'")
+                    }
+                }
+                else {
+                    # chop off "...Filter"
+                    $Field = $_.Key.Substring(0,$_.Key.Length-6)
+                    $Clauses += @("$Field $Operator '$Value'")
+                }
+            }
+            $Query += $Clauses -join " OR "
+            $Query += ")"
+        }
+    }
+
+    $Query
+}
+
+
 ##############################################
 #
 # Functions that query or modified information
@@ -658,8 +766,7 @@ function Get-FilterQuery {
 #
 ##############################################
 
-
-function Find-SccmSiteName {
+function Find-SccmSiteCode {
 <#
     .SYNOPSIS
 
@@ -670,9 +777,16 @@ function Find-SccmSiteName {
         The name key of an Sccm database to create a temporary connection to for
         the query.
 
+    .PARAMETER ConnectionType
+
+        The method to connect to the remote Sccm server. 'WMI' uses a WMI connection and the
+        Sccm SMS_ WMI classes. 'Database'/'DB'/'SQL' connects to the Sccm MSSQL backend database.
+        Default to WMI.
+
     .PARAMETER Credential
 
-        A [Management.Automation.PSCredential] object that stores a SqlUserName and SqlPassword.
+        A [Management.Automation.PSCredential] object that stores a SqlUserName and SqlPassword
+        or a domain credential to use for WMI connections.
 
     .PARAMETER SqlUserName
 
@@ -689,12 +803,12 @@ function Find-SccmSiteName {
         [ValidateNotNullOrEmpty()]
         $ComputerName,
 
-        [Parameter(Position = 2)]
+        [Parameter(Position = 1)]
         [String]
-        [ValidateSet("Database", "DB", "WMI")]
-        $ConnectionMethod = "WMI",
+        [ValidateSet("Database", "DB", "SQL", "WMI")]
+        $ConnectionType = "SQL",
 
-        [Parameter(Position = 3)]
+        [Parameter(Position = 2)]
         [Management.Automation.PSCredential]
         [Management.Automation.CredentialAttribute()]
         $Credential = [Management.Automation.PSCredential]::Empty,
@@ -711,15 +825,15 @@ function Find-SccmSiteName {
     )
 
     process {
-        if($ConnectionMethod -like "WMI") {
+        if($ConnectionType -like "WMI") {
 
             $Query = "SELECT * FROM SMS_ProviderLocation where ProviderForLocalSite = true"
 
             if($Session.Credential) {
-                Get-WmiObject -ComputerName $ComputerName -Namespace "root\sms" -Query $Query -Credential $Session.Credential | ForEach-Object {$_.SiteCode}
+                Get-WmiObject -ComputerName $ComputerName -Namespace "root\sms" -Query $Query -Credential $Session.Credential | ForEach-Object {New-Object PSObject -Property @{'SiteCode' = $_.SiteCode}}
             }
             else {
-                Get-WmiObject -ComputerName $ComputerName -Namespace "root\sms" -Query $Query | ForEach-Object {$_.SiteCode}
+                Get-WmiObject -ComputerName $ComputerName -Namespace "root\sms" -Query $Query | ForEach-Object {New-Object PSObject -Property @{'SiteCode' = $_.SiteCode}}
             }
         }
         else {
@@ -728,7 +842,7 @@ function Find-SccmSiteName {
                 #   this seemed to be the easiest way to preserve the functionality
                 #   of New-SccmSession without major modification
                 $SQLConnection = New-Object System.Data.SQLClient.SQLConnection
-                
+
                 if($PSBoundParameters['Credential']) {
                     $SqlUserName = $Credential.UserName
                     $SqlPassword = $Credential.GetNetworkCredential().Password
@@ -756,8 +870,9 @@ function Find-SccmSiteName {
                 $Null = $SqlAdapter.Fill($Table)
 
                 $Table.Tables[0] | ForEach-Object {
-                    $($_[0] -split "_")[1]
-                }
+                    
+                    New-Object PSObject -Property @{'SiteCode' = $($_[0] -split "_")[1]}
+                } 
 
                 $SQLConnection.Close()
             }
@@ -789,7 +904,7 @@ function Get-SccmApplicationCI {
 
         Order the results by a particular field.
 
-    .PARAMETER Descending
+   .PARAMETER Descending
 
         Switch. If -OrderBy <X> is specified, -Descending will sort the results by
         the given field in descending order.
@@ -852,7 +967,7 @@ function Get-SccmApplicationCI {
 
     .EXAMPLE
 
-        PS C:\> Get-SccmSession | Get-SccmApplicationCI -IsHiddenFilter 1
+        PS C:\> Get-SccmSession | Get-SccmApplicationCI -FilterName IsHidden -FilterValue 1
 
         Finds all hidden user deployed application configuration items.
 #>
@@ -873,7 +988,7 @@ function Get-SccmApplicationCI {
         [Parameter(ParameterSetName = 'OrderBy')]
         [Switch]
         $Descending,
-
+        
         [String]
         [ValidateNotNullOrEmpty()]
         $CreatedByFilter,
@@ -912,12 +1027,12 @@ function Get-SccmApplicationCI {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $Filter        
+        $Filter
     )
-
+    
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT DISTINCT TOP $Newest
@@ -946,12 +1061,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_Application"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -1066,7 +1194,7 @@ function Get-SccmPackage {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -1083,12 +1211,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_Package"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -1178,19 +1319,32 @@ function Get-SccmConfigurationItem {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT TOP $Newest
     * from CI_ConfigurationItems QUERY
 WHERE
      CI_ID is not null
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_ConfigurationItem"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -1264,7 +1418,12 @@ WHERE
 "@
     }
 
-    process {   
+    process {
+        
+        if($Session.ConnectionType -like 'WMI') {
+            throw "WMI functionality for Set-SccmConfigurationItem not yet implemented in PowerSCCM"
+        }
+
         Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
@@ -1403,7 +1562,7 @@ function Get-SccmCollection {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT TOP $Newest
       CollectionID,
       SiteID,
@@ -1426,12 +1585,25 @@ FROM
     vCollections
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_Collection"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -1545,7 +1717,7 @@ function Get-SccmCollectionMember {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT TOP $Newest
     CollectionID,
     SiteID,
@@ -1562,15 +1734,27 @@ FROM
     vCollectionMembers
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_CollectionMember"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
-
 
 ##############################################
 #
@@ -1715,7 +1899,7 @@ function Get-SccmService {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -1747,12 +1931,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_G_System_SERVICE"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -1919,10 +2116,13 @@ SELECT * FROM
 "@
 
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $Query = Get-SQLQueryFilter -Query $Query -Parameters $PSBoundParameters
     }
 
-    process {   
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            throw "WMI functionality for Get-SccmServiceHistory is not implemented."
+        }
         Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
@@ -2074,7 +2274,7 @@ function Get-SccmAutoStart {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -2102,12 +2302,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_G_System_AUTOSTART_SOFTWARE"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -2265,7 +2478,7 @@ function Get-SccmProcess {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -2292,12 +2505,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_G_System_PROCESS"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -2483,10 +2709,13 @@ SELECT * FROM
 "@
 
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $Query = Get-SQLQueryFilter -Query $Query -Parameters $PSBoundParameters
     }
 
-    process {   
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            throw "WMI functionality for Get-SccmServiceHistory is not implemented."
+        }
         Invoke-SccmQuery -Session $Session -Query $Query
     }
 }
@@ -2683,7 +2912,7 @@ function Get-SccmRecentlyUsedApplication {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -2714,12 +2943,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_G_System_CCM_RECENTLY_USED_APPS"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -2879,7 +3121,7 @@ function Get-SccmDriver {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -2909,12 +3151,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_G_System_SYSTEM_DRIVER"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -3047,7 +3302,7 @@ function Get-SccmConsoleUsage {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -3071,12 +3326,26 @@ SELECT * FROM
     AS DATA
 "@
 
+        # TODO: link with ResourceId in SMS_G_System_COMPUTER_SYSTEM class to get computer name
+        $WMIQuery = "SELECT * FROM SMS_G_System_SYSTEM_CONSOLE_USER"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -3086,7 +3355,7 @@ function Get-SccmSoftwareFile {
     .SYNOPSIS
 
         Returns information on inventoried non-Microsoft software files.
-        TThis option is not enabled by default in Sccm- we recommend setting Sccm
+        This option is not enabled by default in Sccm- we recommend setting Sccm
         to inventory all *.exe files on hosts.
 
     .PARAMETER Session
@@ -3219,7 +3488,7 @@ function Get-SccmSoftwareFile {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -3244,12 +3513,26 @@ SELECT * FROM
     AS DATA
 "@
 
+        # TODO: link with ResourceId in SMS_G_System_COMPUTER_SYSTEM class to get computer name
+        $WMIQuery = "SELECT * FROM SMS_G_System_SoftwareFile"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -3427,7 +3710,7 @@ function Get-SccmBrowserHelperObject {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -3456,12 +3739,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_G_System_BROWSER_HELPER_OBJECT"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -3594,7 +3890,7 @@ function Get-SccmShare {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (
     SELECT TOP $Newest
@@ -3618,12 +3914,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_G_System_SHARE"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -3720,7 +4029,7 @@ function Get-SccmPrimaryUser {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 -- MIN_Sccm_VERSION = 5
 SELECT * FROM
 (
@@ -3744,12 +4053,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_UserMachineRelationship"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -4139,7 +4461,7 @@ function Get-SccmADForest {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT TOP $Newest
     ForestFQDN,
     Description,
@@ -4164,12 +4486,25 @@ FROM
     vActiveDirectoryForests
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_ADForest"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -4285,7 +4620,7 @@ function Get-SccmADUser {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (    
     SELECT TOP $Newest
@@ -4313,12 +4648,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_R_User"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -4422,7 +4770,7 @@ function Get-SccmADGroup {
 
     begin {
 
-        $Query = @"
+        $SqlQuery = @"
 SELECT * FROM
 (    
     SELECT TOP $Newest
@@ -4444,12 +4792,25 @@ SELECT * FROM
     AS DATA
 "@
 
+        $WMIQuery = "SELECT * FROM SMS_R_UserGroup"
+        
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
+        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
     }
 
-    process {   
-        Invoke-SccmQuery -Session $Session -Query $Query
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            if($PSBoundParameters['Newest']) {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+            }
+            else {
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+            }
+        }
+        else {
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+        }
     }
 }
 
@@ -4551,10 +4912,13 @@ SELECT * FROM
 "@
 
         # add in our filter logic
-        $Query = Get-FilterQuery -Query $Query -Parameters $PSBoundParameters
+        $Query = Get-SQLQueryFilter -Query $Query -Parameters $PSBoundParameters
     }
 
-    process {   
+    process {
+        if($Session.ConnectionType -like 'WMI') {
+            throw "WMI functionality for Get-SccmServiceHistory is not implemented."
+        }
         Invoke-SccmQuery -Session $Session -Query $Query
     }
 }

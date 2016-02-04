@@ -1,6 +1,8 @@
 # PowerSCCM
 
-Functions to facilitate connections to and queries from SCCM databases for both offensive and defensive applications.
+### Warning: This code is alpha and minimally tested!
+
+Functions to facilitate connections to and queries from SCCM databases and WMI interfaces for both offensive and defensive applications.
 
 The code is kept PowerShell Version 2.0 compliant with no external dependencies.
 
@@ -8,63 +10,63 @@ License: BSD 3-clause
 
 Authors: [@harmj0y](https://twitter.com/harmj0y), [@jaredcatkinson](https://twitter.com/jaredcatkinson), [@enigma0x3](https://twitter.com/enigma0x3), [@mattifestation](https://twitter.com/mattifestation)
 
-Heavily based on [work by Brandon Helms](https://github.com/Cr0n1c/SCCM-Enumeration) that's described more [in this post](https://cr0n1c.wordpress.com/2016/01/27/using-sccm-to-violate-best-practices/).
+Heavily based on [work by Brandon Helms](https://github.com/Cr0n1c/SCCM-Enumeration) that's described more [in this post](https://cr0n1c.wordpress.com/2016/01/27/using-Sccm-to-violate-best-practices/), as well as [SCCM POSH](http://www.snowland.se/powershell/sccm-posh/) by Rikard Rönnkvist.
 
 More background information on using SCCM for DFIR is available on [@KeithTyler's](https://twitter.com/KeithTyler) blog post [on the subject](http://informationonsecurity.blogspot.com/2015/11/microsofts-accidental-enterprise-dfir.html) and in John McLeod/Mike Pilkington's ["Mining-for-Evil"](https://digital-forensics.sans.org/summit-archives/DFIR_Summit/Mining-for-Evil-John-McLeod-Mike-Pilkington.pdf) presentation.
 
 
 ## Usage
 
-PowerSCCM will keep track of established SCCM database sessions, allowing you to reuse these
-sessions with common queries. To establish a new session, use **New-SCCMSession** along with the 
+PowerSCCM will keep track of established SCCM database/WMI sessions, allowing you to reuse these
+sessions with common queries. To establish a new session, use **New-SccmSession** along with the 
 name of the computer with the SCCM database (**-ComputerName**) and the SCCM site database name
 (**-DatabaseName**):
 
-`New-SCCMSession -ComputerName SCCM.testlab.local -DatabaseName CM_LOL`
+`New-SccmSession -ComputerName SCCM.testlab.local -DatabaseName CM_LOL`
 
-This session is now stored in $Script:SCCMSessions and reusable by Get-SCCMSession. 
+This session is now stored in $Script:SCCMSessions and reusable by Get-SccmSession. To establish a session via WMI, use **-ConnectionType WMI**.
 
-To find the available SCCM databases on a server you have access to, use **Find-SCCMDatabase**:
+To find the available SCCM site codes on a server you have access to, use **Find-SccmSiteCode**:
 
-`Find-SCCMDatabase -ComputerName SCCM.testlab.local`
+`Find-SccmSiteCode -ComputerName SCCM.testlab.local`
 
-To retrieve all current SCCM session objects, us **Get-SCCMSession** with optional -Id, -Name, -ComputerName, or -DatabaseName arguments. To close and remove a session, use **Remove-SCCMSession** with any of the same arugments, or the -Session <PowerSCCM.Session> argument for a SCCM session object (passable on the pipeline).
+To retrieve all current SCCM session objects, us **Get-SccmSession** with optional -Id, -Name, -ComputerName, -SiteCode, or -ConnectionType arguments. To close and remove a session, use **Remove-SccmSession** with any of the same arugments, or the -Session <PowerSCCM.Session> argument for a SCCM session object (passable on the pipeline).
 
-`Get-SCCMSession | Remove-SCCMSession`
+`Get-SccmSession | Remove-SccmSession`
 
 
 ## SCCM Database/Server Functions
 
 Various functions that deal with querying/changing information concerning the SCCM database or server, as opposed to dealing with querying inventoried client information.
 
-### Find-SCCMDatabase
-Finds the accessible SCCM databases given a MSSQL server.
+### Find-SccmSiteCode
+Finds SCCM site codes for a given server.
 
-### Get-SCCMApplicationCI
+### Get-SccmApplicationCI
 Returns information on user-deployed applications in an SCCM database.
 
-### Get-SCCMPackage
+### Get-SccmPackage
 Returns information on user-deployed packages in an SCCM database.
 
-### Get-SCCMConfigurationItem
+### Get-SccmConfigurationItem
 Returns SCCM configuration items in an SCCM database.
 
-### Set-SCCMConfigurationItem
+### Set-SccmConfigurationItem
 Sets a field to a particular value for a SCCM configuration keyed by CI_ID.
 
-### Get-SCCMCollection
+### Get-SccmCollection
 Returns SCCM collections that exist on the primary site server.
 
-### Get-SCCMCollectionMember
+### Get-SccmCollectionMember
 Returns SCCM collection members.
 
-## Get-SCCM*
+## Get-Sccm*
 
 Query functions require -Session <PowerSCCM.Session> (passable on the pipeline):
 
-`Get-SCCMSession | Get-SCCMRecentlyUsedApplication | Export-CSV -NoTypeInformation recent_apps.csv`
+`Get-SccmSession | Get-SccmRecentlyUsedApplication | Export-CSV -NoTypeInformation recent_apps.csv`
 
-`Get-SCCMRecentlyUsedApplication -Session $Session | Export-CSV -NoTypeInformation recent_apps.csv`
+`Get-SccmRecentlyUsedApplication -Session $Session | Export-CSV -NoTypeInformation recent_apps.csv`
 
 All of these functions also share a common set of optional parameters:
 
@@ -77,80 +79,80 @@ All of these functions also share a common set of optional parameters:
 Each function also has a set of custom -XFilter parameters that allow for query filtering on specific field names/values.
 
 
-### Get-SCCMService
+### Get-SccmService
 
 Returns information on the current set of running services as of the last SCCM agent query/checkin.
 
-### Get-SCCMServiceHistory
+### Get-SccmServiceHistory
 Returns information on the historical set of running services as of the last SCCM agent query/checkin.
 
-### Get-SCCMAutoStart
+### Get-SccmAutoStart
 Returns information on the set of autostart programs as of the last SCCM agent query/checkin.
 
-### Get-SCCMProcess
+### Get-SccmProcess
 Returns information on the set of currently running processes as of the last SCCM agent query/checkin.
 
-### Get-SCCMProcessHistory
+### Get-SccmProcessHistory
 Returns information on the historical set of running processes as of the last SCCM agent query/checkin.
 
-### Get-SCCMRecentlyUsedApplication
+### Get-SccmRecentlyUsedApplication
 Returns information on recently launched applications on hosts as of the last SCCM agent query/checkin.
 
-### Get-SCCMDriver
+### Get-SccmDriver
 Returns information on the set of currently laoded system drivers as of the last SCCM agent query/checkin.
 
-### Get-SCCMConsoleUsage
+### Get-SccmConsoleUsage
 Returns historical information on user console usage as of the last SCCM agent query/checkin.
 
-### Get-SCCMSoftwareFile
+### Get-SccmSoftwareFile
 Returns information on inventoried non-Microsoft software files. **This option is not enabled by default in SCCM**- we recommend setting SCCM to inventory all *.exe files on hosts.
 
-### Get-SCCMBrowserHelperObject
+### Get-SccmBrowserHelperObject
 Returns information on discovered browser helper objects. **This option is not enabled by default in SCCM**.
 
-### Get-SCCMShare
+### Get-SccmShare
 Returns information on discovered shares.**This option is not enabled by default in SCCM**.
 
-### Get-SCCMPrimaryUser
+### Get-SccmPrimaryUser
 Returns user/machine pairings where the user is set as a 'Primary User' through SCCM.
 
 
-## Find-SCCM*
+## Find-Sccm*
 
-Meta-functions that use the Get-SCCM* query functions to find common 'bad' things. All of these functions -Session <PowerSCCM.Session> (passable on the pipeline).
+Meta-functions that use the Get-Sccm* query functions to find common 'bad' things. All of these functions -Session <PowerSCCM.Session> (passable on the pipeline).
 
-### Find-SCCMRenamedCMD
-Finds renamed cmd.exe executables using Get-SCCMRecentlyUsedApplication and appropriate filters.
+### Find-SccmRenamedCMD
+Finds renamed cmd.exe executables using Get-SccmRecentlyUsedApplication and appropriate filters.
 
-### Find-SCCMUnusualEXE
-Finds recently launched applications that don't end in *.exe using Get-SCCMRecentlyUsedApplication and appropriate filters.
+### Find-SccmUnusualEXE
+Finds recently launched applications that don't end in *.exe using Get-SccmRecentlyUsedApplication and appropriate filters.
 
-### Find-SCCMRareApplication
-Finds the rarest -Limit <X> recently launched applications that don't end in *.exe using Get-SCCMRecentlyUsedApplication and appropriate filters.
+### Find-SccmRareApplication
+Finds the rarest -Limit <X> recently launched applications that don't end in *.exe using Get-SccmRecentlyUsedApplication and appropriate filters.
 
-### Find-SCCMPostExploitation
+### Find-SccmPostExploitation
 Finds recently launched applications commonly used in post-exploitation.
 
-### Find-SCCMPostExploitationFile
+### Find-SccmPostExploitationFile
 Finds indexed .exe's commonly used in post-exploitation.
 
-### Find-SCCMMimikatz
+### Find-SccmMimikatz
 Finds launched mimikatz instances by searching the 'FileDescription' and 'CompanyName' fields of recently launched applications.
 
-### Find-SCCMMimikatzFile
+### Find-SccmMimikatzFile
 Finds inventoried mimikatz.exe instances by searching the 'FileDescription' field of inventoried .exe's.
 
 
 ## SCCM Active Directory Functions
 
-### Get-SCCMADForest
+### Get-SccmADForest
 Returns information on Active Directory forests enumerated by SCCM agents.
 
-### Get-SCCMADUser
+### Get-SccmADUser
 Returns information on Active Directory users enumerated by SCCM agents.
 
-### Get-SCCMADGroup
+### Get-SccmADGroup
 Returns information on Active Directory group enumerated by SCCM agents.
 
-### Get-SCCMADGroupMember
-Returns information on Active Directory group membership enumerated by SCCM agents.
+### Get-SccmADGroupMember
+Returns information on Active Directory group membership enumerated by SCCM agents
