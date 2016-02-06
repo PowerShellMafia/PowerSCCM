@@ -566,7 +566,6 @@ function Get-SQLQueryFilter {
         $Query,
 
         [Parameter(Position = 1, Mandatory=$True)]
-        [ValidateNotNullOrEmpty()]
         $Parameters
     )
 
@@ -687,7 +686,6 @@ function Get-WMIQueryFilter {
         $Query,
 
         [Parameter(Position = 1, Mandatory=$True)]
-        [ValidateNotNullOrEmpty()]
         $Parameters
     )
 
