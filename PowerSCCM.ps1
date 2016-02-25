@@ -5480,6 +5480,55 @@ function New-SccmApplicationDeployment {
     }
 }
 
+function Invoke-SCCMDeviceCheckin{
+<#
+    .SYNOPSIS
+
+        Forces all members of a collection to immediately check for Machine policy updates and execute
+        any new applications available.
+
+    .PARAMETER Session
+
+        The custom PowerSccm.Session object to query, generated/stored by New-SccmSession
+        and retrievable with Get-SccmSession. Required. Passable on the pipeline.
+
+    .PARAMETER CollectionName
+
+        Name of the collection you would like to force the Machine policy update check on.
+
+    .EXAMPLE
+
+        PS C:\> Get-SccmSession | Invoke-SCCMDeviceCheckin -CollecionName "hax"
+
+        Force all members of the "hax" collection to check for new Machine Policy updates.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $True, ValueFromPipeline=$True)]
+        [ValidateScript({ $_.PSObject.TypeNames -contains 'PowerSccm.Session'})]
+        $Session,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        $CollectionName
+    )
+
+    process{
+
+        $WMIConnection = [WMICLASS]"\\$($Session.ComputerName)\Root\SMS\Site_$($Session.SiteCode):SMS_ClientOperation"
+
+        # Get WMI method paramaters for "InitiateClientOperation"
+        $CMClientNotification = $WMIConnection.psbase.GetMethodParameters("InitiateClientOperation")
+
+        #Type 8 = "Download Computer Policy"
+        $CMClientNotification.Type = 8
+        
+        $Collection = Get-WmiObject -ComputerName $Session.ComputerName -NameSpace "ROOT\SMS\site_$($Session.SiteCode)" -Class SMS_Collection  | ?{$_.Name -eq $CollectionName}
+        $CMClientNotification.TargetCollectionID = $Collection.CollectionID
+        $WMIConnection.psbase.InvokeMethod("InitiateClientOperation",$CMClientNotification,$Null)
+    }
+}
+
 
 function Remove-SccmApplicationDeployment {
 <#

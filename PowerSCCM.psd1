@@ -59,6 +59,7 @@ FunctionsToExport = @(
     'Add-SccmDeviceToCollection',
     'Add-SccmUserToCollection',
     'New-SccmApplication',
+    'Invoke-SCCMDeviceCheckin',
     'Remove-SccmApplication',
     'New-SccmApplicationDeployment',
     'Remove-SccmApplicationDeployment',
