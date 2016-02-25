@@ -179,6 +179,9 @@ Deletes a SCCM application.
 #### New-SccmApplicationDeployment
 Deploys an application to a specific collection.
 
+#### Invoke-SCCMDeviceCheckin
+Forces all members of a collection to immediately check for Machine policy updates and execute any new applications.
+
 #### Remove-SccmApplicationDeployment
 Deletes a SCCM application deployment.
 
