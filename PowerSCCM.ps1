@@ -77,7 +77,7 @@ function New-SccmSession {
 
         [Parameter(Position = 1, Mandatory = $True)]
         [String]
-        [ValidatePattern('^[A-Za-z]{3}$')]
+        [ValidatePattern('^[A-Za-z0-9]{3}$')]
         $SiteCode,
 
         [Parameter(Position = 2, Mandatory = $True)]
