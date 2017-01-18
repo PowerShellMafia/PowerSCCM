@@ -5169,7 +5169,7 @@ function New-SccmApplication {
             $WorkingDirectory = "C:\Windows\System32\WindowsPowerShell\v1.0"
 
             if ($PSBoundParameters.ContainsKey("PowerShellScript")) {
-                $Bytes = ([Text.Encoding]::ASCII).GetBytes($PSScript)
+                $Bytes = ([Text.Encoding]::ASCII).GetBytes($PowerShellScript)
                 $Encoded = [System.Convert]::ToBase64String($Bytes)
             }
 
@@ -5259,10 +5259,10 @@ function New-SccmApplication {
         # set XML to SDMPackageXML
         $Application.SDMPackageXML = $Xml
 
-        # hide the collection from display in the SCCM GUI ;)
+        # hide the application from display in the SCCM GUI ;)
         $Application.IsHidden = $True
 
-        # create the collection
+        # create the application
         $Null = $Application.PSBase.Put()
 
         $Properties = @{
