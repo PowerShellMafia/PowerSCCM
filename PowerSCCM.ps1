@@ -309,7 +309,7 @@ function Get-SccmSession {
 
         [Parameter(ValueFromPipelineByPropertyName=$True)]
         [String]
-        [ValidatePattern('^[A-Za-z]{3}$')]
+        [ValidatePattern('^[A-Za-z0-9]{3}$')]
         $SiteCode,
 
         [Parameter(ValueFromPipelineByPropertyName=$True)]
