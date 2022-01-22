@@ -65,8 +65,9 @@ FunctionsToExport = @(
     'Remove-SccmApplicationDeployment',
     'Push-WmiPayload',
     'Remove-WmiPayload',
-    'Grant-WmiNameSpaceRead ',
-    'Revoke-WmiNameSpaceRead'
+    'Grant-WmiNameSpaceRead',
+    'Revoke-WmiNameSpaceRead',
+    'New-CMScriptDeployement'
 )
 
 # List of all files packaged with this module
