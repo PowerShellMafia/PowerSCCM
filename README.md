@@ -197,6 +197,8 @@ Grants remote read access to 'Everyone' for a given WMI namespace.
 #### Revoke-WmiNameSpaceRead
 Removes remote read access from 'Everyone' for a given WMI namespace that was granted by Grant-WmiNameSpaceRead.
 
+#### New-CMScriptDeployement
+Permits to deploy a PowerShell script (called a CMScript) on a distant machine with SCCM, instead of an application.
 
 ## Offensive Deployment
 

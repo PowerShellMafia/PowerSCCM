@@ -5930,3 +5930,92 @@ function Revoke-WmiNameSpaceRead {
         throw "SetSecurityDescriptor failed: $($Output.ReturnValue)"
     }
 }
+
+
+function New-CMScriptDeployement {
+<#
+    .SYNOPSIS
+    
+        Permits to deploy a PowerShell script (called a CMScript) on a distant machine with SCCM, instead of an application.
+        Use the script 'configurationmanager.psd1' by Microsoft, normally presents on a SCCM server.
+   
+    .PARAMETER CMDrive
+
+        Configuration Manager site drive to use, will be created if it doesn't exist.
+
+    .PARAMETER ServerFQDN
+
+        Site server FQDN for the drive root (the SCCM server basically).
+
+    .PARAMETER TargetDevice
+
+        The target computer to deploy the script.
+
+    .PARAMETER Path
+
+        The local path of the PowerShell script to execute.
+
+    .PARAMETER ScriptName
+
+        The name the CMScript will have.
+
+    .PARAMETER ManagerPath
+
+        The local path to the configurationmanager.psd1 script if it is not at the default location.
+
+    .EXAMPLE
+
+        PS C:\> New-CMScriptDeployement -CMDrive 'newDrive' -ServerFQDN 'SCCM.testlab.local' -TargetDevice 'target.testlab.local' -Path 'C:\temp\reverse.ps1' -ScriptName 'EvilScript'
+
+    .LINK
+
+        https://docs.microsoft.com/en-us/powershell/module/configurationmanager/?view=sccm-ps
+#>
+
+    param(
+        [Parameter(Mandatory = $True)]
+        [String]
+        $CMDrive,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        $ServerFQDN,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        $TargetDevice,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        $Path,
+
+        [Parameter(Mandatory = $True)]
+        [String]
+        $ScriptName,
+
+        [String]
+        $ManagerPath = "C:\Program Files (x86)\Microsoft Configuration Manager\AdminConsole\bin\configurationmanager.psd1"
+    )
+
+    try {
+        Import-Module $ManagerPath
+    }
+    catch {
+        Write-Warning $_
+    }
+    
+    # Create the Configuration Manager drive and move to it
+    New-PSDrive -Name $CMDrive -PSProvider CMSite -Root $ServerFQDN
+    Set-Location $CMDrive':\'
+
+    # Retrieve the target device
+    $CMDevice = Get-CMDevice -Name $TargetDevice
+
+    # Create a new CM Script and retrieve its GUID
+    New-CMScript -ScriptFile $Path -ScriptName $ScriptName
+    $ScriptGuid = (Get-CMScript -ScriptName $ScriptName -Fast).ScriptGuid
+
+    # "Commit" the script and execute it on the remote machine
+    Approve-CMScript -ScriptGuid $ScriptGuid
+    Invoke-CMScript -ScriptGuid $ScriptGuid -Device $CMDevice -PassThru
+}
